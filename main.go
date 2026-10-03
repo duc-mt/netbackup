@@ -37,6 +37,10 @@ func run() int {
 	concurrency := flag.Int("concurrency", 5, "maximum number of devices to back up in parallel")
 	connectTimeout := flag.Duration("connect-timeout", 10*time.Second, "TCP connect + SSH handshake timeout per device")
 	commandTimeout := flag.Duration("command-timeout", 30*time.Second, "time budget for running the backup command per device")
+	redactSecrets := flag.Bool("redact", true, "mask passwords, pre-shared keys, and SNMP communities from saved files")
+	saveUnchanged := flag.Bool("save-unchanged", false, "save a new backup file even if configuration is identical to the previous backup")
+	retentionCount := flag.Int("retention-count", 0, "maximum number of recent backups to keep per device (0 to disable)")
+	retentionDays := flag.Int("retention-days", 0, "prune backups older than N days per device (0 to disable)")
 	flag.Parse()
 
 	logger, err := logging.New(*logDir)
@@ -56,24 +60,28 @@ func run() int {
 	}
 	logger.Info("loaded %d device(s) from %s", len(devices), *inventoryPath)
 
-	creds, err := credentials.Resolve(*envFile)
+	credStore, err := credentials.NewStore(*envFile)
 	if err != nil {
 		logger.Error("resolving credentials: %v", err)
 		return 1
 	}
 
 	cfg := backup.Config{
-		Creds:       creds,
-		OutputDir:   *outputDir,
-		Concurrency: *concurrency,
+		CredStore:      credStore,
+		OutputDir:      *outputDir,
+		Concurrency:    *concurrency,
+		Redact:         *redactSecrets,
+		RetentionCount: *retentionCount,
+		RetentionDays:  *retentionDays,
+		SaveUnchanged:  *saveUnchanged,
 		SSH: sshclient.Options{
 			ConnectTimeout: *connectTimeout,
 			CommandTimeout: *commandTimeout,
 		},
 	}
 
-	logger.Info("starting backup run: %d device(s), concurrency=%d, connect-timeout=%s, command-timeout=%s",
-		len(devices), cfg.Concurrency, *connectTimeout, *commandTimeout)
+	logger.Info("starting backup run: %d device(s), concurrency=%d, redact=%t, retention-count=%d, retention-days=%d",
+		len(devices), cfg.Concurrency, cfg.Redact, cfg.RetentionCount, cfg.RetentionDays)
 
 	results := backup.RunAll(devices, cfg)
 	failures := logger.Summary(results)

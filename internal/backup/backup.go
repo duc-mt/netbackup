@@ -5,31 +5,48 @@
 package backup
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"netbackup/internal/credentials"
 	"netbackup/internal/errcat"
 	"netbackup/internal/inventory"
+	"netbackup/internal/redact"
 	"netbackup/internal/sshclient"
 	"netbackup/internal/vendor"
 )
 
 // Config holds everything a backup run needs besides the device list.
 type Config struct {
-	Creds       credentials.Credentials
-	OutputDir   string
-	Concurrency int
-	SSH         sshclient.Options
+	CredStore      *credentials.Store
+	Creds          credentials.Credentials
+	OutputDir      string
+	Concurrency    int
+	Redact         bool
+	RetentionCount int
+	RetentionDays  int
+	SaveUnchanged  bool
+	SSH            sshclient.Options
+}
+
+func (c *Config) getCreds(group string) credentials.Credentials {
+	if c.CredStore != nil {
+		return c.CredStore.ForGroup(group)
+	}
+	return c.Creds
 }
 
 // Result is what came of trying to back up one device.
 type Result struct {
 	Device     inventory.Device
 	Success    bool
+	Unchanged  bool
 	Category   errcat.Category
 	Err        error
 	OutputPath string
@@ -87,7 +104,8 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 		return result
 	}
 
-	client, err := sshclient.Connect(dev.Address, dev.Port, cfg.Creds.Username, cfg.Creds.Password, cfg.SSH)
+	creds := cfg.getCreds(dev.CredentialGroup)
+	client, err := sshclient.Connect(dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
 	if err != nil {
 		cerr := errcat.Classify(dev.Hostname, "connect", err)
 		result.Err = cerr
@@ -110,12 +128,32 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 		return result
 	}
 
+	if cfg.Redact {
+		output = redact.Config(output)
+	}
+
+	// Change Detection against latest backup
+	latestPath, latestHash, found := findLatestBackup(cfg.OutputDir, dev.Hostname, profile.FileExtension)
+	currHash := sha256.Sum256([]byte(output))
+	if found && latestHash == currHash {
+		result.Unchanged = true
+		if !cfg.SaveUnchanged {
+			result.Success = true
+			result.OutputPath = latestPath
+			return result
+		}
+	}
+
 	path, err := save(dev, profile, output, cfg.OutputDir)
 	if err != nil {
 		cerr := errcat.New(errcat.CategoryIOError, dev.Hostname, "write", err)
 		result.Err = cerr
 		result.Category = cerr.Category
 		return result
+	}
+
+	if cfg.RetentionCount > 0 || cfg.RetentionDays > 0 {
+		_ = pruneBackups(cfg.OutputDir, dev.Hostname, profile.FileExtension, cfg.RetentionCount, cfg.RetentionDays)
 	}
 
 	result.Success = true
@@ -142,6 +180,113 @@ func save(dev inventory.Device, profile vendor.Profile, content, outputDir strin
 		return "", fmt.Errorf("writing backup file: %w", err)
 	}
 	return path, nil
+}
+
+type fileEntry struct {
+	path    string
+	modTime time.Time
+}
+
+func findLatestBackup(outputDir, hostname, ext string) (string, [32]byte, bool) {
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return "", [32]byte{}, false
+	}
+
+	prefix := sanitize(hostname) + "_"
+	var matching []fileEntry
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ext) {
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			matching = append(matching, fileEntry{
+				path:    filepath.Join(outputDir, name),
+				modTime: info.ModTime(),
+			})
+		}
+	}
+
+	if len(matching) == 0 {
+		return "", [32]byte{}, false
+	}
+
+	// Sort newest first
+	sort.Slice(matching, func(i, j int) bool {
+		return matching[i].modTime.After(matching[j].modTime)
+	})
+
+	latestPath := matching[0].path
+	data, err := os.ReadFile(latestPath)
+	if err != nil {
+		return "", [32]byte{}, false
+	}
+
+	return latestPath, sha256.Sum256(data), true
+}
+
+func pruneBackups(outputDir, hostname, ext string, keepCount, keepDays int) int {
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return 0
+	}
+
+	prefix := sanitize(hostname) + "_"
+	var matching []fileEntry
+	now := time.Now()
+	cutoff := now.Add(-time.Duration(keepDays) * 24 * time.Hour)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ext) {
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			matching = append(matching, fileEntry{
+				path:    filepath.Join(outputDir, name),
+				modTime: info.ModTime(),
+			})
+		}
+	}
+
+	if len(matching) == 0 {
+		return 0
+	}
+
+	// Sort newest first
+	sort.Slice(matching, func(i, j int) bool {
+		return matching[i].modTime.After(matching[j].modTime)
+	})
+
+	pruned := 0
+	for i, f := range matching {
+		deleteFile := false
+		// Keep at least the latest backup even if expired by days
+		if i > 0 && keepDays > 0 && f.modTime.Before(cutoff) {
+			deleteFile = true
+		}
+		if keepCount > 0 && i >= keepCount {
+			deleteFile = true
+		}
+
+		if deleteFile {
+			if err := os.Remove(f.path); err == nil {
+				pruned++
+			}
+		}
+	}
+
+	return pruned
 }
 
 func sanitize(name string) string {

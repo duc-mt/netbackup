@@ -29,48 +29,98 @@ type Credentials struct {
 	Password string
 }
 
-// Resolve loads credentials using the priority described above. envFile may
-// be empty, in which case step 1 is skipped.
-func Resolve(envFile string) (Credentials, error) {
-	fileVals := map[string]string{}
+// Store caches configuration and credentials for the default profile and
+// any per-site credential groups defined in .env or the process environment.
+type Store struct {
+	fileVals     map[string]string
+	defaultCreds Credentials
+}
+
+// NewStore initializes a credential Store from the specified env file and
+// environment variables, interactively prompting for default credentials
+// if not provided.
+func NewStore(envFile string) (*Store, error) {
+	s := &Store{
+		fileVals: map[string]string{},
+	}
 	if envFile != "" {
 		vals, err := parseEnvFile(envFile)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return Credentials{}, fmt.Errorf("reading env file %q: %w", envFile, err)
+			return nil, fmt.Errorf("reading env file %q: %w", envFile, err)
 		}
 		if err == nil {
-			fileVals = vals
+			s.fileVals = vals
 		}
-		// A missing --env-file is not an error: the caller may be relying
-		// on real environment variables or the interactive prompt instead.
 	}
 
-	creds := Credentials{
-		Username: firstNonEmpty(fileVals[EnvUsername], os.Getenv(EnvUsername)),
-		Password: firstNonEmpty(fileVals[EnvPassword], os.Getenv(EnvPassword)),
+	defaultCreds := Credentials{
+		Username: firstNonEmpty(s.fileVals[EnvUsername], os.Getenv(EnvUsername)),
+		Password: firstNonEmpty(s.fileVals[EnvPassword], os.Getenv(EnvPassword)),
 	}
 
-	if creds.Username == "" {
+	if defaultCreds.Username == "" {
 		u, err := promptLine("SSH username: ")
 		if err != nil {
-			return Credentials{}, fmt.Errorf("reading username: %w", err)
+			return nil, fmt.Errorf("reading username: %w", err)
 		}
-		creds.Username = u
+		defaultCreds.Username = u
 	}
 
-	if creds.Password == "" {
+	if defaultCreds.Password == "" {
 		p, err := promptPassword("SSH password: ")
 		if err != nil {
-			return Credentials{}, fmt.Errorf("reading password: %w", err)
+			return nil, fmt.Errorf("reading password: %w", err)
 		}
-		creds.Password = p
+		defaultCreds.Password = p
 	}
 
-	if creds.Username == "" || creds.Password == "" {
-		return Credentials{}, fmt.Errorf("username and password are both required")
+	if defaultCreds.Username == "" || defaultCreds.Password == "" {
+		return nil, fmt.Errorf("username and password are both required")
 	}
 
-	return creds, nil
+	s.defaultCreds = defaultCreds
+	return s, nil
+}
+
+// ForGroup returns credentials for the named group (case-insensitive).
+// It searches for NETBACKUP_<GROUP>_USERNAME and NETBACKUP_<GROUP>_PASSWORD.
+// Any missing field falls back to the default credentials.
+func (s *Store) ForGroup(group string) Credentials {
+	group = strings.ToUpper(strings.TrimSpace(group))
+	if group == "" || group == "DEFAULT" {
+		return s.defaultCreds
+	}
+
+	cleanGroup := strings.Map(func(r rune) rune {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		return '_'
+	}, group)
+
+	userKey := fmt.Sprintf("NETBACKUP_%s_USERNAME", cleanGroup)
+	passKey := fmt.Sprintf("NETBACKUP_%s_PASSWORD", cleanGroup)
+
+	u := firstNonEmpty(s.fileVals[userKey], os.Getenv(userKey))
+	p := firstNonEmpty(s.fileVals[passKey], os.Getenv(passKey))
+
+	if u == "" {
+		u = s.defaultCreds.Username
+	}
+	if p == "" {
+		p = s.defaultCreds.Password
+	}
+
+	return Credentials{Username: u, Password: p}
+}
+
+// Resolve loads default credentials using the priority described above.
+func Resolve(envFile string) (Credentials, error) {
+	s, err := NewStore(envFile)
+	if err != nil {
+		return Credentials{}, err
+	}
+	return s.defaultCreds, nil
 }
 
 // parseEnvFile reads simple KEY=VALUE lines. No external dependency is used

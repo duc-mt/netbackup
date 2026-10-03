@@ -41,6 +41,50 @@ PASSTHROUGH_QUOTE=p@ss"word!
 	}
 }
 
+func TestStoreForGroup(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	content := `
+NETBACKUP_USERNAME=default_admin
+NETBACKUP_PASSWORD=default_secret
+NETBACKUP_SITE_A_USERNAME=site_a_user
+NETBACKUP_SITE_A_PASSWORD=site_a_pass
+NETBACKUP_PARTIAL_USERNAME=partial_user
+`
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write temp env file: %v", err)
+	}
+
+	store, err := NewStore(envPath)
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+
+	// 1. Default group
+	cDef := store.ForGroup("")
+	if cDef.Username != "default_admin" || cDef.Password != "default_secret" {
+		t.Errorf("unexpected default creds: %+v", cDef)
+	}
+
+	// 2. Specific group site_a
+	cSiteA := store.ForGroup("site_a")
+	if cSiteA.Username != "site_a_user" || cSiteA.Password != "site_a_pass" {
+		t.Errorf("unexpected site_a creds: %+v", cSiteA)
+	}
+
+	// 3. Partial group (password falls back to default)
+	cPartial := store.ForGroup("partial")
+	if cPartial.Username != "partial_user" || cPartial.Password != "default_secret" {
+		t.Errorf("unexpected partial creds: %+v", cPartial)
+	}
+
+	// 4. Unknown group (fully falls back to default)
+	cUnknown := store.ForGroup("nonexistent")
+	if cUnknown.Username != "default_admin" || cUnknown.Password != "default_secret" {
+		t.Errorf("unexpected unknown creds: %+v", cUnknown)
+	}
+}
+
 func TestUnquote(t *testing.T) {
 	tests := []struct {
 		input    string

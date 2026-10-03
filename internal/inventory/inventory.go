@@ -14,21 +14,23 @@ import (
 
 // Device is one target to back up.
 type Device struct {
-	Hostname string // friendly name, used for the output filename
-	Address  string // IP or DNS name used to connect
-	Port     int
-	Vendor   string // key into the vendor.Profiles map
-	Line     int    // source line number, for error messages
+	Hostname        string // friendly name, used for the output filename
+	Address         string // IP or DNS name used to connect
+	Port            int
+	Vendor          string // key into the vendor.Profiles map
+	CredentialGroup string // optional group key for per-site credentials (default: "default")
+	Line            int    // source line number, for error messages
 }
 
 // Load reads a CSV file with the header:
 //
-//	hostname,address,port,vendor
+//	hostname,address,port,vendor,credential_group
 //
 // Rules, chosen to make hand-editing forgiving:
 //   - blank lines and lines starting with '#' are skipped
 //   - the header line is detected and skipped automatically
 //   - port defaults to 22 if empty
+//   - credential_group defaults to "default" if empty
 //   - a malformed line is reported and skipped -- it does not abort loading
 //     the rest of the file, matching the tool's "one bad entry never stops
 //     the run" philosophy
@@ -97,11 +99,12 @@ func parseLine(fields []string, lineNo int) (Device, error) {
 	}
 
 	dev := Device{
-		Hostname: fields[0],
-		Address:  fields[1],
-		Port:     22,
-		Vendor:   "generic",
-		Line:     lineNo,
+		Hostname:        fields[0],
+		Address:         fields[1],
+		Port:            22,
+		Vendor:          "generic",
+		CredentialGroup: "default",
+		Line:            lineNo,
 	}
 	if dev.Hostname == "" || dev.Address == "" {
 		return Device{}, fmt.Errorf("line %d: hostname and address are required", lineNo)
@@ -117,6 +120,10 @@ func parseLine(fields []string, lineNo int) (Device, error) {
 
 	if len(fields) >= 4 && fields[3] != "" {
 		dev.Vendor = strings.ToLower(fields[3])
+	}
+
+	if len(fields) >= 5 && fields[4] != "" {
+		dev.CredentialGroup = strings.ToLower(fields[4])
 	}
 
 	return dev, nil

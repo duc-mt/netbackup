@@ -56,7 +56,11 @@ func (l *Logger) Summary(results []backup.Result) int {
 	l.Info("---- Backup run summary ----")
 	for _, r := range results {
 		if r.Success {
-			l.Info("OK      %-20s (%s) -> %s [%s]", r.Device.Hostname, r.Device.Address, r.OutputPath, r.Duration.Round(time.Millisecond))
+			status := "SAVED"
+			if r.Unchanged {
+				status = "UNCHANGED"
+			}
+			l.Info("OK      %-20s (%s) [%s] -> %s [%s]", r.Device.Hostname, r.Device.Address, status, r.OutputPath, r.Duration.Round(time.Millisecond))
 			continue
 		}
 		failures++
