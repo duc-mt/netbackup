@@ -44,26 +44,30 @@ or need a platform not listed above.
 ```
 netbackup/
 ├── go.mod
-├── main.go                        # CLI flags + orchestration
+├── Makefile
+├── cmd/
+│   └── netbackup/
+│       └── main.go                    # CLI flags + orchestration
 ├── internal/
-│   ├── inventory/inventory.go     # RFC CSV device list parser (with credential_group)
-│   ├── credentials/credentials.go # multi-group .env / env-var / secure prompt store
-│   ├── redact/redact.go           # sensitive credential & secret masking
-│   ├── vendor/vendor.go           # per-platform backup command map
-│   ├── sshclient/sshclient.go     # thread-safe SSH connect + run, hard timeouts
-│   ├── backup/backup.go           # worker pool, change detection, and retention pruning
-│   ├── errcat/errcat.go           # error categorization
-│   └── logging/logging.go         # console + file logging, run summary
-├── vendor/                        # vendored dependencies (x/crypto, x/term, x/sys)
-├── bin/                           # pre-built, ready-to-run binaries
-├── inventory.example.csv          # copy to inventory.csv and edit
-└── .env.example                   # copy to .env and edit
+│   ├── inventory/inventory.go         # RFC CSV device list parser (with credential_group)
+│   ├── credentials/credentials.go     # multi-group .env / env-var / secure prompt store
+│   ├── redact/redact.go               # sensitive credential & secret masking
+│   ├── vendor/vendor.go               # per-platform backup command map
+│   ├── sshclient/sshclient.go         # thread-safe SSH connect + run, hard timeouts
+│   ├── backup/backup.go               # worker pool, change detection, and retention pruning
+│   ├── errcat/errcat.go               # error categorization
+│   └── logging/logging.go             # console + file logging, run summary
+├── vendor/                            # vendored dependencies (x/crypto, x/term, x/sys)
+├── bin/                               # pre-built, ready-to-run binaries
+└── examples/
+    ├── inventory.csv                  # sample inventory
+    └── env.example                    # sample credentials
 ```
 
 ## Build from source (fully offline — no internet at any step)
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o netbackup-linux-amd64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -ldflags="-s -w" -o netbackup-linux-amd64 ./cmd/netbackup
 ```
 
 Go automatically builds from `vendor/` whenever that directory is present
@@ -72,12 +76,24 @@ and consistent with `go.mod` (true here) — no flags needed, and no
 
 ## Run
 
-```bash
-cp inventory.example.csv inventory.csv   # edit with your real devices
-cp .env.example .env                     # edit with real credentials
-chmod 600 .env
+### 1. Initialize configuration
 
-./netbackup-linux-amd64 \
+Fastest way:
+```bash
+make init
+```
+
+Or manually:
+```bash
+cp examples/inventory.csv inventory.csv   # edit with your real devices
+cp examples/env.example .env             # edit with real credentials
+chmod 600 .env
+```
+
+### 2. Execute backup
+
+```bash
+./bin/netbackup-linux-amd64 \
   -inventory inventory.csv \
   -out backups \
   -log-dir logs \
@@ -122,10 +138,41 @@ edge-rtr-01,10.30.1.1,22,juniper_junos,default
 - `port` defaults to `22`.
 - `vendor` defaults to `generic` (`show running-config`). Supported vendor keys:
   `cisco_ios`, `huawei_vrp`, `juniper_junos`, `aruba`, `ruijie`, `fortigate`,
-  `checkpoint_gaia`, `pfsense`, `generic`.
+  `checkpoint_gaia`, `pfsense`, `vyos`, `generic`.
 - `credential_group` defaults to `default`. If specified as `site_hcm`, the
   tool looks for `NETBACKUP_SITE_HCM_USERNAME` and `NETBACKUP_SITE_HCM_PASSWORD`,
   falling back to `NETBACKUP_USERNAME` / `NETBACKUP_PASSWORD` if not set.
+
+## Development, Maintenance & Expansion
+
+### Useful Developer One-Liners
+
+- **Run all unit tests**:
+  ```bash
+  go test ./...
+  ```
+- **Test & Build native binary**:
+  ```bash
+  go test ./... && CGO_ENABLED=0 go build -ldflags="-s -w" -o netbackup .
+  ```
+- **Test & Rebuild ALL cross-platform binaries into `bin/`**:
+  ```bash
+  go test ./... && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/netbackup-linux-amd64 . && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/netbackup-linux-arm64 . && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o bin/netbackup-windows-amd64.exe . && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o bin/netbackup-darwin-amd64 . && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o bin/netbackup-darwin-arm64 .
+  ```
+
+### Maintaining & Expanding netbackup
+
+1. **Adding a New Vendor Platform**:
+   - Add an entry to `Profiles` in `internal/vendor/vendor.go`.
+   - Specify `Name`, `Interactive` mode (`true` for console menus, `false` for non-interactive SSH exec), `SetupCommands`, `BackupCommand`, and `FileExtension`.
+   - Add unit tests in `internal/vendor/vendor_test.go`.
+
+2. **Adding Redaction Rules**:
+   - Add regex rules to `commonPatterns` in `internal/redact/redact.go` to mask vendor-specific passwords, pre-shared keys, or secrets.
+   - Add unit test cases in `internal/redact/redact_test.go`.
+
+3. **Updating Vendored Dependencies**:
+   - When online, run `go mod tidy && go mod vendor` to update offline dependencies in `vendor/`.
 
 ## Security notes
 
