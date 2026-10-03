@@ -1,10 +1,10 @@
 module netbackup
 
-go 1.22
+go 1.25.0
 
 require (
-	golang.org/x/crypto v0.21.0
-	golang.org/x/term v0.18.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/term v0.43.0
 )
 
-require golang.org/x/sys v0.18.0 // indirect
+require golang.org/x/sys v0.45.0 // indirect
