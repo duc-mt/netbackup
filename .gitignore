@@ -1,0 +1,12 @@
+# Environment & Credential files
+.env
+*.env
+
+# Local inventory & outputs
+inventory.csv
+backups/
+logs/
+
+# OS metadata
+.DS_Store
+Thumbs.db

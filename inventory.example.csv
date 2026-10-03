@@ -1,0 +1,14 @@
+hostname,address,port,vendor
+# One device per line. port and vendor are optional:
+#   - port defaults to 22
+#   - vendor defaults to "generic" (runs "show running-config")
+# Supported vendor keys: cisco_ios, huawei_vrp, juniper_junos, aruba,
+# ruijie, fortigate, checkpoint_gaia, pfsense, generic
+core-sw-itoshtp-01,10.10.1.1,22,cisco_ios
+dc-tanthuan-fw-01,10.20.1.1,22,fortigate
+vpcmt8-fw-01,10.30.1.1,22,checkpoint_gaia
+vptt-ap-ctrl-01,10.40.1.1,22,aruba
+cmt8-core-sw-01,10.50.1.1,22,ruijie
+dc-tanthuan-edge-rtr-01,10.20.2.1,22,juniper_junos
+cmt8-dist-sw-01,10.50.2.1,22,huawei_vrp
+vp-cmt8-perimeter-fw-01,10.30.2.1,22,pfsense
