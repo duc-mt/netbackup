@@ -7,8 +7,8 @@ import (
 
 type dummyTimeoutError struct{}
 
-func (d dummyTimeoutError) Error() string { return "i/o timeout" }
-func (d dummyTimeoutError) Timeout() bool { return true }
+func (d dummyTimeoutError) Error() string   { return "i/o timeout" }
+func (d dummyTimeoutError) Timeout() bool   { return true }
 func (d dummyTimeoutError) Temporary() bool { return true }
 
 func TestClassify(t *testing.T) {

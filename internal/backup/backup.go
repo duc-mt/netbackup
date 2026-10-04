@@ -36,7 +36,7 @@ type Config struct {
 	SSH            sshclient.Options
 }
 
-func (c *Config) getCreds(group string) credentials.Credentials {
+func (c *Config) creds(group string) credentials.Credentials {
 	if c.CredStore != nil {
 		return c.CredStore.ForGroup(group)
 	}
@@ -109,7 +109,7 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 	}
 	dev.Vendor = profile.Key
 
-	creds := cfg.getCreds(dev.CredentialGroup)
+	creds := cfg.creds(dev.CredentialGroup)
 	client, err := sshclient.Connect(dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
 	if err != nil {
 		cerr := errcat.Classify(dev.Hostname, "connect", err)
@@ -193,17 +193,17 @@ type fileEntry struct {
 	modTime time.Time
 }
 
-func findLatestBackup(outputDir string, dev inventory.Device, ext string) (string, [32]byte, bool) {
+func findMatchingBackups(outputDir string, dev inventory.Device, ext string) ([]fileEntry, error) {
 	entries, err := os.ReadDir(outputDir)
 	if err != nil {
-		return "", [32]byte{}, false
+		return nil, err
 	}
 
 	var matching []fileEntry
 	filename := sanitize(dev.Hostname) + ext
 	filenameAltPrefix := sanitize(dev.Hostname) + "_"
-
 	vCandidates := vendorCandidates(dev)
+
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "backup-") {
 			continue
@@ -234,13 +234,22 @@ func findLatestBackup(outputDir string, dev inventory.Device, ext string) (strin
 	}
 
 	if len(matching) == 0 {
-		return "", [32]byte{}, false
+		return nil, nil
 	}
 
 	// Sort newest first
 	sort.Slice(matching, func(i, j int) bool {
 		return matching[i].modTime.After(matching[j].modTime)
 	})
+
+	return matching, nil
+}
+
+func findLatestBackup(outputDir string, dev inventory.Device, ext string) (string, [32]byte, bool) {
+	matching, err := findMatchingBackups(outputDir, dev, ext)
+	if err != nil || len(matching) == 0 {
+		return "", [32]byte{}, false
+	}
 
 	latestPath := matching[0].path
 	data, err := os.ReadFile(latestPath)
@@ -252,57 +261,15 @@ func findLatestBackup(outputDir string, dev inventory.Device, ext string) (strin
 }
 
 func pruneBackups(outputDir string, dev inventory.Device, ext string, keepCount, keepDays int) int {
-	entries, err := os.ReadDir(outputDir)
-	if err != nil {
+	matching, err := findMatchingBackups(outputDir, dev, ext)
+	if err != nil || len(matching) == 0 {
 		return 0
 	}
 
-	var matching []fileEntry
 	now := time.Now()
 	cutoff := now.Add(-time.Duration(keepDays) * 24 * time.Hour)
-	filename := sanitize(dev.Hostname) + ext
-	filenameAltPrefix := sanitize(dev.Hostname) + "_"
-
-	vCandidates := vendorCandidates(dev)
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "backup-") {
-			continue
-		}
-
-		for _, vName := range vCandidates {
-			vendorDir := filepath.Join(outputDir, entry.Name(), vName)
-			ventries, err := os.ReadDir(vendorDir)
-			if err != nil {
-				continue
-			}
-
-			for _, v := range ventries {
-				if v.IsDir() {
-					continue
-				}
-				if v.Name() == filename || (strings.HasPrefix(v.Name(), filenameAltPrefix) && strings.HasSuffix(v.Name(), ext)) {
-					info, err := v.Info()
-					if err == nil {
-						matching = append(matching, fileEntry{
-							path:    filepath.Join(vendorDir, v.Name()),
-							modTime: info.ModTime(),
-						})
-					}
-				}
-			}
-		}
-	}
-
-	if len(matching) == 0 {
-		return 0
-	}
-
-	// Sort newest first
-	sort.Slice(matching, func(i, j int) bool {
-		return matching[i].modTime.After(matching[j].modTime)
-	})
-
 	pruned := 0
+
 	for i, f := range matching {
 		deleteFile := false
 		// Keep at least the latest backup even if expired by days
@@ -363,4 +330,3 @@ func vendorCandidates(dev inventory.Device) []string {
 	}
 	return keys
 }
-

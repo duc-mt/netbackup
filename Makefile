@@ -1,7 +1,7 @@
 BINARY  := netbackup
 LDFLAGS := -s -w
 
-.PHONY: build test test-race vet fmt vendor cross clean init
+.PHONY: build test test-race vet fmt lint vendor cross clean init
 
 # Single static binary, no cgo, dependencies taken from ./vendor (works offline).
 build:
@@ -19,6 +19,9 @@ vet:
 
 fmt:
 	gofmt -l -w cmd internal
+
+lint:
+	golangci-lint run ./...
 
 # Run once on a machine with internet access, then commit/copy ./vendor into the air gap.
 vendor:

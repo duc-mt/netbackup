@@ -51,7 +51,7 @@ func (l *Logger) Error(format string, args ...any) { l.line("ERROR", fmt.Sprintf
 // caller can set a meaningful process exit code.
 func (l *Logger) Summary(results []backup.Result) int {
 	failures := 0
-	byCategory := map[errcat.Category]int{}
+	byCategory := make(map[errcat.Category]int)
 
 	l.Info("---- Backup run summary ----")
 	for _, r := range results {

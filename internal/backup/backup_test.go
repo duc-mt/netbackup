@@ -100,4 +100,3 @@ func TestFindLatestBackupAndPrune(t *testing.T) {
 		t.Errorf("expected latest path using alias to be %s, got %s", file3, aliasLatestPath)
 	}
 }
-

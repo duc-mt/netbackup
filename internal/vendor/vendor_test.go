@@ -37,19 +37,19 @@ func TestGetVendor(t *testing.T) {
 
 func TestAliases(t *testing.T) {
 	cases := map[string]string{
-		"cisco":         "cisco_ios",
-		"cisco-ios":     "cisco_ios",
-		"IOS-XE":        "cisco_ios",
-		"junos":         "juniper_junos",
-		"juniper":       "juniper_junos",
-		"huawei":        "huawei_vrp",
-		"vrp":           "huawei_vrp",
-		"fortinet":      "fortigate",
-		"fortios":       "fortigate",
-		"eos":           "arista",
-		"checkpoint":    "checkpoint_gaia",
-		"aruba-cx":      "aruba",
-		"rgos":          "ruijie",
+		"cisco":      "cisco_ios",
+		"cisco-ios":  "cisco_ios",
+		"IOS-XE":     "cisco_ios",
+		"junos":      "juniper_junos",
+		"juniper":    "juniper_junos",
+		"huawei":     "huawei_vrp",
+		"vrp":        "huawei_vrp",
+		"fortinet":   "fortigate",
+		"fortios":    "fortigate",
+		"eos":        "arista",
+		"checkpoint": "checkpoint_gaia",
+		"aruba-cx":   "aruba",
+		"rgos":       "ruijie",
 	}
 
 	for input, expectedKey := range cases {

@@ -118,7 +118,7 @@ func (s *Store) ForGroup(group string) Credentials {
 func Resolve(envFile string) (Credentials, error) {
 	s, err := NewStore(envFile)
 	if err != nil {
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("resolving credentials: %w", err)
 	}
 	return s.defaultCreds, nil
 }
@@ -128,7 +128,7 @@ func Resolve(envFile string) (Credentials, error) {
 func parseEnvFile(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opening env file %q: %w", path, err)
 	}
 	defer f.Close()
 
@@ -147,7 +147,10 @@ func parseEnvFile(path string) (map[string]string, error) {
 		val := unquote(parts[1])
 		vals[key] = val
 	}
-	return vals, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanning env file %q: %w", path, err)
+	}
+	return vals, nil
 }
 
 func unquote(s string) string {
@@ -166,7 +169,7 @@ func promptLine(prompt string) (string, error) {
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reading input from terminal: %w", err)
 	}
 	return strings.TrimSpace(line), nil
 }
@@ -176,7 +179,7 @@ func promptPassword(prompt string) (string, error) {
 	bytePw, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reading password from terminal: %w", err)
 	}
 	return string(bytePw), nil
 }

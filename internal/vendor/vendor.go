@@ -46,42 +46,49 @@ type Profile struct {
 // "vendor" value used in the inventory file.
 var Profiles = map[string]Profile{
 	"cisco_ios": {
+		Key:           "cisco_ios",
 		Name:          "Cisco IOS / IOS-XE",
 		Interactive:   false,
 		BackupCommand: "show running-config",
 		FileExtension: ".cfg",
 	},
 	"huawei_vrp": {
+		Key:           "huawei_vrp",
 		Name:          "Huawei VRP",
 		Interactive:   false,
 		BackupCommand: "display current-configuration",
 		FileExtension: ".cfg",
 	},
 	"juniper_junos": {
+		Key:           "juniper_junos",
 		Name:          "Juniper Junos",
 		Interactive:   false,
 		BackupCommand: "show configuration | display set",
 		FileExtension: ".set",
 	},
 	"aruba": {
+		Key:           "aruba",
 		Name:          "Aruba AOS-S / AOS-CX",
 		Interactive:   false,
 		BackupCommand: "show running-config",
 		FileExtension: ".cfg",
 	},
 	"ruijie": {
+		Key:           "ruijie",
 		Name:          "Ruijie RGOS",
 		Interactive:   false,
 		BackupCommand: "show running-config",
 		FileExtension: ".cfg",
 	},
 	"fortigate": {
+		Key:           "fortigate",
 		Name:          "Fortinet FortiOS",
 		Interactive:   false,
 		BackupCommand: "show full-configuration",
 		FileExtension: ".conf",
 	},
 	"checkpoint_gaia": {
+		Key:           "checkpoint_gaia",
 		Name:          "Check Point Gaia (clish)",
 		Interactive:   false,
 		BackupCommand: "show configuration",
@@ -95,6 +102,7 @@ var Profiles = map[string]Profile{
 	// menu text instead of the XML config -- verify against your build
 	// before relying on it.
 	"pfsense": {
+		Key:           "pfsense",
 		Name:          "pfSense",
 		Interactive:   true,
 		SetupCommands: []string{""}, // wake the shell prompt
@@ -102,12 +110,14 @@ var Profiles = map[string]Profile{
 		FileExtension: ".xml",
 	},
 	"vyos": {
+		Key:           "vyos",
 		Name:          "VyOS",
 		Interactive:   false,
 		BackupCommand: "/opt/vyatta/bin/vyatta-op-cmd-wrapper show configuration commands",
 		FileExtension: ".config",
 	},
 	"arista": {
+		Key:           "arista",
 		Name:          "Arista EOS",
 		Interactive:   false,
 		BackupCommand: "show running-config",
@@ -115,6 +125,7 @@ var Profiles = map[string]Profile{
 	},
 	// Fallback for anything not explicitly mapped yet.
 	"generic": {
+		Key:           "generic",
 		Name:          "Generic / unspecified",
 		Interactive:   false,
 		BackupCommand: "show running-config",
@@ -174,13 +185,6 @@ var aliases = map[string]string{
 
 	// Generic
 	"generic": "generic",
-}
-
-func init() {
-	for k, p := range Profiles {
-		p.Key = k
-		Profiles[k] = p
-	}
 }
 
 // CanonicalKey normalizes a vendor name or alias (handling case, '-', ' ')
