@@ -27,6 +27,7 @@ type Config struct {
 	CredStore      *credentials.Store
 	Creds          credentials.Credentials
 	OutputDir      string
+	RunName        string
 	Concurrency    int
 	Redact         bool
 	RetentionCount int
@@ -60,6 +61,9 @@ type Result struct {
 func RunAll(devices []inventory.Device, cfg Config) []Result {
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
+	}
+	if cfg.RunName == "" {
+		cfg.RunName = "backup-" + time.Now().Format("2006-01-02-1504")
 	}
 
 	results := make([]Result, len(devices))
@@ -103,6 +107,7 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 		result.Category = errcat.CategoryUnknown
 		return result
 	}
+	dev.Vendor = profile.Key
 
 	creds := cfg.getCreds(dev.CredentialGroup)
 	client, err := sshclient.Connect(dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
@@ -133,7 +138,7 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 	}
 
 	// Change Detection against latest backup
-	latestPath, latestHash, found := findLatestBackup(cfg.OutputDir, dev.Hostname, profile.FileExtension)
+	latestPath, latestHash, found := findLatestBackup(cfg.OutputDir, dev, profile.FileExtension)
 	currHash := sha256.Sum256([]byte(output))
 	if found && latestHash == currHash {
 		result.Unchanged = true
@@ -144,7 +149,7 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 		}
 	}
 
-	path, err := save(dev, profile, output, cfg.OutputDir)
+	path, err := save(dev, profile, output, cfg)
 	if err != nil {
 		cerr := errcat.New(errcat.CategoryIOError, dev.Hostname, "write", err)
 		result.Err = cerr
@@ -153,7 +158,7 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 	}
 
 	if cfg.RetentionCount > 0 || cfg.RetentionDays > 0 {
-		_ = pruneBackups(cfg.OutputDir, dev.Hostname, profile.FileExtension, cfg.RetentionCount, cfg.RetentionDays)
+		_ = pruneBackups(cfg.OutputDir, dev, profile.FileExtension, cfg.RetentionCount, cfg.RetentionDays)
 	}
 
 	result.Success = true
@@ -161,19 +166,20 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 	return result
 }
 
-// save writes the captured config to <outputDir>/<hostname>_<timestamp><ext>.
-func save(dev inventory.Device, profile vendor.Profile, content, outputDir string) (string, error) {
-	if err := os.MkdirAll(outputDir, 0o750); err != nil {
-		return "", fmt.Errorf("creating output dir: %w", err)
+// save writes the captured config to <outputDir>/<runName>/<vendor>/<hostname><ext>.
+func save(dev inventory.Device, profile vendor.Profile, content string, cfg Config) (string, error) {
+	vendorDir := filepath.Join(cfg.OutputDir, cfg.RunName, dev.Vendor)
+	if err := os.MkdirAll(vendorDir, 0o750); err != nil {
+		return "", fmt.Errorf("creating vendor dir: %w", err)
 	}
 
-	timestamp := time.Now().Format("20060102-150405")
-	filename := fmt.Sprintf("%s_%s%s", sanitize(dev.Hostname), timestamp, profile.FileExtension)
-	path := filepath.Join(outputDir, filename)
+	filename := sanitize(dev.Hostname) + profile.FileExtension
+	path := filepath.Join(vendorDir, filename)
 
 	if _, err := os.Stat(path); err == nil {
-		filename = fmt.Sprintf("%s_%s_%s%s", sanitize(dev.Hostname), sanitize(dev.Address), timestamp, profile.FileExtension)
-		path = filepath.Join(outputDir, filename)
+		// Collision fallback
+		filename = fmt.Sprintf("%s_%s%s", sanitize(dev.Hostname), sanitize(dev.Address), profile.FileExtension)
+		path = filepath.Join(vendorDir, filename)
 	}
 
 	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
@@ -187,29 +193,43 @@ type fileEntry struct {
 	modTime time.Time
 }
 
-func findLatestBackup(outputDir, hostname, ext string) (string, [32]byte, bool) {
+func findLatestBackup(outputDir string, dev inventory.Device, ext string) (string, [32]byte, bool) {
 	entries, err := os.ReadDir(outputDir)
 	if err != nil {
 		return "", [32]byte{}, false
 	}
 
-	prefix := sanitize(hostname) + "_"
 	var matching []fileEntry
+	filename := sanitize(dev.Hostname) + ext
+	filenameAltPrefix := sanitize(dev.Hostname) + "_"
 
+	vCandidates := vendorCandidates(dev)
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "backup-") {
 			continue
 		}
-		name := entry.Name()
-		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ext) {
-			info, err := entry.Info()
+
+		for _, vName := range vCandidates {
+			vendorDir := filepath.Join(outputDir, entry.Name(), vName)
+			ventries, err := os.ReadDir(vendorDir)
 			if err != nil {
 				continue
 			}
-			matching = append(matching, fileEntry{
-				path:    filepath.Join(outputDir, name),
-				modTime: info.ModTime(),
-			})
+
+			for _, v := range ventries {
+				if v.IsDir() {
+					continue
+				}
+				if v.Name() == filename || (strings.HasPrefix(v.Name(), filenameAltPrefix) && strings.HasSuffix(v.Name(), ext)) {
+					info, err := v.Info()
+					if err == nil {
+						matching = append(matching, fileEntry{
+							path:    filepath.Join(vendorDir, v.Name()),
+							modTime: info.ModTime(),
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -231,31 +251,45 @@ func findLatestBackup(outputDir, hostname, ext string) (string, [32]byte, bool) 
 	return latestPath, sha256.Sum256(data), true
 }
 
-func pruneBackups(outputDir, hostname, ext string, keepCount, keepDays int) int {
+func pruneBackups(outputDir string, dev inventory.Device, ext string, keepCount, keepDays int) int {
 	entries, err := os.ReadDir(outputDir)
 	if err != nil {
 		return 0
 	}
 
-	prefix := sanitize(hostname) + "_"
 	var matching []fileEntry
 	now := time.Now()
 	cutoff := now.Add(-time.Duration(keepDays) * 24 * time.Hour)
+	filename := sanitize(dev.Hostname) + ext
+	filenameAltPrefix := sanitize(dev.Hostname) + "_"
 
+	vCandidates := vendorCandidates(dev)
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "backup-") {
 			continue
 		}
-		name := entry.Name()
-		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ext) {
-			info, err := entry.Info()
+
+		for _, vName := range vCandidates {
+			vendorDir := filepath.Join(outputDir, entry.Name(), vName)
+			ventries, err := os.ReadDir(vendorDir)
 			if err != nil {
 				continue
 			}
-			matching = append(matching, fileEntry{
-				path:    filepath.Join(outputDir, name),
-				modTime: info.ModTime(),
-			})
+
+			for _, v := range ventries {
+				if v.IsDir() {
+					continue
+				}
+				if v.Name() == filename || (strings.HasPrefix(v.Name(), filenameAltPrefix) && strings.HasSuffix(v.Name(), ext)) {
+					info, err := v.Info()
+					if err == nil {
+						matching = append(matching, fileEntry{
+							path:    filepath.Join(vendorDir, v.Name()),
+							modTime: info.ModTime(),
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -282,11 +316,31 @@ func pruneBackups(outputDir, hostname, ext string, keepCount, keepDays int) int 
 		if deleteFile {
 			if err := os.Remove(f.path); err == nil {
 				pruned++
+				// Attempt to clean up empty directories
+				dir := filepath.Dir(f.path)
+				if removeEmptyDir(dir) {
+					parentDir := filepath.Dir(dir)
+					removeEmptyDir(parentDir)
+				}
 			}
 		}
 	}
 
 	return pruned
+}
+
+func removeEmptyDir(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	_, err = f.Readdirnames(1)
+	if err != nil { // empty or error
+		_ = os.Remove(dir)
+		return true
+	}
+	return false
 }
 
 func sanitize(name string) string {
@@ -301,3 +355,12 @@ func sanitize(name string) string {
 	}
 	return string(out)
 }
+
+func vendorCandidates(dev inventory.Device) []string {
+	keys := []string{dev.Vendor}
+	if p, err := vendor.Get(dev.Vendor); err == nil && p.Key != "" && p.Key != dev.Vendor {
+		keys = append(keys, p.Key)
+	}
+	return keys
+}
+

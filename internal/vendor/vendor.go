@@ -3,10 +3,16 @@
 // Profiles map below -- nothing else in the codebase needs to change.
 package vendor
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Profile describes how to pull a backup from one platform.
 type Profile struct {
+	// Key is the canonical identifier for the profile.
+	Key string
+
 	// Name is a human-readable label used in logs.
 	Name string
 
@@ -95,6 +101,18 @@ var Profiles = map[string]Profile{
 		BackupCommand: "cat /cf/conf/config.xml",
 		FileExtension: ".xml",
 	},
+	"vyos": {
+		Name:          "VyOS",
+		Interactive:   false,
+		BackupCommand: "/opt/vyatta/bin/vyatta-op-cmd-wrapper show configuration commands",
+		FileExtension: ".config",
+	},
+	"arista": {
+		Name:          "Arista EOS",
+		Interactive:   false,
+		BackupCommand: "show running-config",
+		FileExtension: ".cfg",
+	},
 	// Fallback for anything not explicitly mapped yet.
 	"generic": {
 		Name:          "Generic / unspecified",
@@ -104,13 +122,89 @@ var Profiles = map[string]Profile{
 	},
 }
 
-// Get looks up a profile by key, case-sensitively matching the inventory
-// file's vendor column (callers normalise case before calling this).
-func Get(key string) (Profile, error) {
-	p, ok := Profiles[key]
-	if !ok {
-		return Profile{}, fmt.Errorf("unknown vendor key %q (known: %v)", key, knownKeys())
+var aliases = map[string]string{
+	// Cisco
+	"cisco":        "cisco_ios",
+	"cisco_ios":    "cisco_ios",
+	"cisco_ios_xe": "cisco_ios",
+	"ios":          "cisco_ios",
+	"ios_xe":       "cisco_ios",
+	"iosxe":        "cisco_ios",
+
+	// Juniper
+	"junos":         "juniper_junos",
+	"juniper":       "juniper_junos",
+	"juniper_junos": "juniper_junos",
+
+	// Huawei
+	"huawei":     "huawei_vrp",
+	"vrp":        "huawei_vrp",
+	"huawei_vrp": "huawei_vrp",
+
+	// Fortinet
+	"fortinet":  "fortigate",
+	"fortios":   "fortigate",
+	"fortigate": "fortigate",
+
+	// Arista
+	"arista":     "arista",
+	"eos":        "arista",
+	"arista_eos": "arista",
+
+	// Aruba
+	"aruba":    "aruba",
+	"aruba_cx": "aruba",
+	"aos_cx":   "aruba",
+	"aos_s":    "aruba",
+
+	// Ruijie
+	"ruijie": "ruijie",
+	"rgos":   "ruijie",
+
+	// Check Point
+	"checkpoint":      "checkpoint_gaia",
+	"checkpoint_gaia": "checkpoint_gaia",
+	"gaia":            "checkpoint_gaia",
+
+	// pfSense
+	"pfsense": "pfsense",
+
+	// VyOS
+	"vyos": "vyos",
+
+	// Generic
+	"generic": "generic",
+}
+
+func init() {
+	for k, p := range Profiles {
+		p.Key = k
+		Profiles[k] = p
 	}
+}
+
+// CanonicalKey normalizes a vendor name or alias (handling case, '-', ' ')
+// and returns its canonical Profiles key if known.
+func CanonicalKey(name string) (string, bool) {
+	norm := strings.ToLower(strings.TrimSpace(name))
+	norm = strings.NewReplacer("-", "_", " ", "_").Replace(norm)
+	if canonical, ok := aliases[norm]; ok {
+		return canonical, true
+	}
+	if _, ok := Profiles[norm]; ok {
+		return norm, true
+	}
+	return "", false
+}
+
+// Get looks up a profile by vendor name or alias, case-insensitively and
+// normalizing hyphens/spaces.
+func Get(name string) (Profile, error) {
+	canonical, ok := CanonicalKey(name)
+	if !ok {
+		return Profile{}, fmt.Errorf("unknown vendor %q (known: %v)", name, knownKeys())
+	}
+	p := Profiles[canonical]
 	return p, nil
 }
 
