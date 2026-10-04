@@ -20,37 +20,37 @@ var commonPatterns = []patternRule{
 	},
 	// Cisco / IOS-XE / Ruijie / Aruba password and secret definitions
 	{
-		re:   regexp.MustCompile(`(?i)(^\s*(?:enable\s+)?(?:password|secret)(?:\s+\d+)?)\s+\S+`),
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:username\s+\S+(?:\s+privilege\s+\d+)?\s+)?(?:enable\s+)?(?:password|secret)(?:\s+\d+)?)\s+\S+`),
 		repl: "${1} <REDACTED>",
 	},
 	// Cisco / Network SNMP community strings
 	{
-		re:   regexp.MustCompile(`(?i)(^\s*snmp-server\s+community)\s+\S+(.*)`),
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*snmp-server\s+community)\s+\S+(.*)`),
 		repl: "${1} <REDACTED>${2}",
 	},
 	// IPsec / VPN pre-shared keys (Cisco, Check Point, etc.)
 	{
-		re:   regexp.MustCompile(`(?i)(^\s*(?:pre-shared-key|preshared-key|key)\s+(?:0|5|6|7)?)\s*\S+`),
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:crypto\s+isakmp\s+key|pre-shared-key|preshared-key|key)\s+(?:0|5|6|7)?)\s*\S+`),
 		repl: "${1} <REDACTED>",
 	},
 	// Juniper Junos encrypted passwords & secrets
 	{
-		re:   regexp.MustCompile(`(?i)(encrypted-password|pre-shared-secret)\s+"?[^";]+"?`),
+		re:   regexp.MustCompile(`(?i)(?m)(encrypted-password|pre-shared-secret)\s+"?[^";]+"?`),
 		repl: `${1} "<REDACTED>"`,
 	},
 	// Juniper SNMP communities
 	{
-		re:   regexp.MustCompile(`(?i)(community\s+)"?[^";{\s]+"?(\s*\{)`),
+		re:   regexp.MustCompile(`(?i)(?m)(community\s+)"?[^";{\s]+"?(\s*\{)`),
 		repl: `${1}"<REDACTED>"${2}`,
 	},
 	// FortiOS passwords and keys (e.g. set password ENC ..., set preshared-key ...)
 	{
-		re:   regexp.MustCompile(`(?i)(^\s*set\s+(?:password|secret|preshared-key|pre-shared-key|private-key))\s+\S+`),
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*set\s+(?:password(?:\s+ENC)?|secret|preshared-key|pre-shared-key|private-key))\s+\S+`),
 		repl: `${1} "<REDACTED>"`,
 	},
 	// Huawei VRP cipher passwords / communities
 	{
-		re:   regexp.MustCompile(`(?i)(^\s*(?:password|cipher|snmp-agent community (?:read|write)))\s+cipher\s+\S+`),
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:password|cipher|snmp-agent community (?:read|write)))\s+cipher\s+\S+`),
 		repl: `${1} cipher <REDACTED>`,
 	},
 }
