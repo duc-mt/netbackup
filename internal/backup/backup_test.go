@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"crypto/sha256"
 	"os"
 	"path/filepath"
@@ -189,7 +190,7 @@ func TestRunAll(t *testing.T) {
 		},
 	}
 
-	results := RunAll(devices, cfg)
+	results := RunAll(context.Background(), devices, cfg)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}

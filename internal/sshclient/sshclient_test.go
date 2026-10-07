@@ -1,6 +1,7 @@
 package sshclient
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
@@ -150,12 +151,13 @@ func TestConnectAndPasswordAuth(t *testing.T) {
 	defer cleanup()
 
 	opts := Options{
-		ConnectTimeout: 2 * time.Second,
-		CommandTimeout: 2 * time.Second,
+		ConnectTimeout:  2 * time.Second,
+		CommandTimeout:  2 * time.Second,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
 	// 1. Successful password authentication
-	client, err := Connect("127.0.0.1", port, "testuser", "testpass", opts)
+	client, err := Connect(context.Background(), "127.0.0.1", port, "testuser", "testpass", opts)
 	if err != nil {
 		t.Fatalf("expected successful connect: %v", err)
 	}
@@ -180,7 +182,7 @@ func TestConnectAndPasswordAuth(t *testing.T) {
 	}
 
 	// 4. Failed authentication
-	_, err = Connect("127.0.0.1", port, "testuser", "wrongpass", opts)
+	_, err = Connect(context.Background(), "127.0.0.1", port, "testuser", "wrongpass", opts)
 	if err == nil {
 		t.Fatalf("expected connection to fail with wrong password")
 	}
@@ -191,12 +193,13 @@ func TestKeyboardInteractiveAuth(t *testing.T) {
 	defer cleanup()
 
 	opts := Options{
-		ConnectTimeout: 2 * time.Second,
-		CommandTimeout: 2 * time.Second,
+		ConnectTimeout:  2 * time.Second,
+		CommandTimeout:  2 * time.Second,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
 	// Connect using keyboard-interactive credentials
-	client, err := Connect("127.0.0.1", port, "kbuser", "kbpass", opts)
+	client, err := Connect(context.Background(), "127.0.0.1", port, "kbuser", "kbpass", opts)
 	if err != nil {
 		t.Fatalf("expected successful connect with keyboard-interactive: %v", err)
 	}
@@ -208,11 +211,12 @@ func TestRunCommandTimeout(t *testing.T) {
 	defer cleanup()
 
 	opts := Options{
-		ConnectTimeout: 2 * time.Second,
-		CommandTimeout: 100 * time.Millisecond,
+		ConnectTimeout:  2 * time.Second,
+		CommandTimeout:  100 * time.Millisecond,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	client, err := Connect("127.0.0.1", port, "testuser", "testpass", opts)
+	client, err := Connect(context.Background(), "127.0.0.1", port, "testuser", "testpass", opts)
 	if err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
@@ -232,11 +236,12 @@ func TestRunInteractive(t *testing.T) {
 	defer cleanup()
 
 	opts := Options{
-		ConnectTimeout: 5 * time.Second,
-		CommandTimeout: 10 * time.Second,
+		ConnectTimeout:  5 * time.Second,
+		CommandTimeout:  10 * time.Second,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	client, err := Connect("127.0.0.1", port, "testuser", "testpass", opts)
+	client, err := Connect(context.Background(), "127.0.0.1", port, "testuser", "testpass", opts)
 	if err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}

@@ -5,11 +5,12 @@
 package backup
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -58,7 +59,7 @@ type Result struct {
 // workers, so a handful of unreachable devices can't serialise the whole
 // run behind their timeouts, while a reasonable concurrency cap keeps the
 // tool from hammering dozens of devices at once.
-func RunAll(devices []inventory.Device, cfg Config) []Result {
+func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Result {
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
 	}
@@ -76,7 +77,7 @@ func RunAll(devices []inventory.Device, cfg Config) []Result {
 		go func(i int, dev inventory.Device) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i] = runOne(dev, cfg)
+			results[i] = runOne(ctx, dev, cfg)
 		}(i, dev)
 	}
 
@@ -88,7 +89,7 @@ func RunAll(devices []inventory.Device, cfg Config) []Result {
 // depth on top of the already-careful error handling below: a bug in a
 // dependency, or an unexpected nil somewhere, still must not crash the
 // whole batch -- it should surface as one failed device instead.
-func runOne(dev inventory.Device, cfg Config) (result Result) {
+func runOne(ctx context.Context, dev inventory.Device, cfg Config) (result Result) {
 	start := time.Now()
 	result = Result{Device: dev}
 
@@ -110,7 +111,7 @@ func runOne(dev inventory.Device, cfg Config) (result Result) {
 	dev.Vendor = profile.Key
 
 	creds := cfg.creds(dev.CredentialGroup)
-	client, err := sshclient.Connect(dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+	client, err := sshclient.Connect(ctx, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
 	if err != nil {
 		cerr := errcat.Classify(dev.Hostname, "connect", err)
 		result.Err = cerr
@@ -238,8 +239,8 @@ func findMatchingBackups(outputDir string, dev inventory.Device, ext string) ([]
 	}
 
 	// Sort newest first
-	sort.Slice(matching, func(i, j int) bool {
-		return matching[i].modTime.After(matching[j].modTime)
+	slices.SortFunc(matching, func(a, b fileEntry) int {
+		return b.modTime.Compare(a.modTime)
 	})
 
 	return matching, nil

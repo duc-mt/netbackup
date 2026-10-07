@@ -10,10 +10,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"netbackup/internal/backup"
 	"netbackup/internal/credentials"
@@ -41,7 +46,12 @@ func run() int {
 	saveUnchanged := flag.Bool("save-unchanged", false, "save a new backup file even if configuration is identical to the previous backup")
 	retentionCount := flag.Int("retention-count", 0, "maximum number of recent backups to keep per device (0 to disable)")
 	retentionDays := flag.Int("retention-days", 0, "prune backups older than N days per device (0 to disable)")
+	knownHostsPath := flag.String("known-hosts", "known_hosts", "path to an OpenSSH known_hosts file used to verify device host keys")
+	insecureIgnoreHostKey := flag.Bool("insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
 	flag.Parse()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	logger, err := logging.New(*logDir)
 	if err != nil {
@@ -66,6 +76,18 @@ func run() int {
 		return 1
 	}
 
+	var hostKeyCallback ssh.HostKeyCallback
+	if *insecureIgnoreHostKey {
+		logger.Warn("host key verification disabled via -insecure-ignore-host-key -- connections are vulnerable to MITM")
+		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+	} else {
+		hostKeyCallback, err = sshclient.LoadKnownHosts(*knownHostsPath)
+		if err != nil {
+			logger.Error("loading known_hosts: %v (populate -known-hosts, or pass -insecure-ignore-host-key to explicitly disable verification)", err)
+			return 1
+		}
+	}
+
 	cfg := backup.Config{
 		CredStore:      credStore,
 		OutputDir:      *outputDir,
@@ -75,15 +97,16 @@ func run() int {
 		RetentionDays:  *retentionDays,
 		SaveUnchanged:  *saveUnchanged,
 		SSH: sshclient.Options{
-			ConnectTimeout: *connectTimeout,
-			CommandTimeout: *commandTimeout,
+			ConnectTimeout:  *connectTimeout,
+			CommandTimeout:  *commandTimeout,
+			HostKeyCallback: hostKeyCallback,
 		},
 	}
 
 	logger.Info("starting backup run: %d device(s), concurrency=%d, redact=%t, retention-count=%d, retention-days=%d",
 		len(devices), cfg.Concurrency, cfg.Redact, cfg.RetentionCount, cfg.RetentionDays)
 
-	results := backup.RunAll(devices, cfg)
+	results := backup.RunAll(ctx, devices, cfg)
 	failures := logger.Summary(results)
 
 	if failures > 0 {

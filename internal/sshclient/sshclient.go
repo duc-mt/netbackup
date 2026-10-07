@@ -6,8 +6,11 @@ package sshclient
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -43,15 +46,77 @@ func (s *safeBuffer) String() string {
 type Options struct {
 	ConnectTimeout time.Duration // TCP dial + SSH handshake
 	CommandTimeout time.Duration // time budget for running the backup command(s)
+
+	// HostKeyCallback verifies the server's host key during the SSH
+	// handshake. It is required: Connect returns an error if it is nil
+	// rather than silently accepting any host key. Use LoadKnownHosts to
+	// build one from a known_hosts file, ssh.FixedHostKey for a single
+	// pinned key, or ssh.InsecureIgnoreHostKey() as an explicit, callsite-
+	// visible opt-out (never as a hidden default).
+	HostKeyCallback ssh.HostKeyCallback
+}
+
+// ErrNoHostKeyCallback is returned by Connect when opts.HostKeyCallback is
+// nil, so callers can't accidentally run with host key checking disabled.
+var ErrNoHostKeyCallback = errors.New("sshclient: Options.HostKeyCallback is required (use LoadKnownHosts, ssh.FixedHostKey, or an explicit ssh.InsecureIgnoreHostKey())")
+
+// LoadKnownHosts builds a HostKeyCallback from an OpenSSH-format known_hosts
+// file. It supports plain (non-hashed) host patterns; hashed "|1|..." entries
+// are skipped. The callback matches on the hostname/address as passed to
+// Connect (not on resolved IP), mirroring how the entries are usually added.
+func LoadKnownHosts(path string) (ssh.HostKeyCallback, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading known_hosts %q: %w", path, err)
+	}
+
+	type entry struct {
+		hosts []string
+		key   ssh.PublicKey
+	}
+	var entries []entry
+
+	rest := data
+	for len(rest) > 0 {
+		_, hosts, pubKey, _, remainder, err := ssh.ParseKnownHosts(rest)
+		if err != nil {
+			break // end of parseable entries (blank lines, comments, EOF)
+		}
+		entries = append(entries, entry{hosts: hosts, key: pubKey})
+		rest = remainder
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("known_hosts %q: no usable (non-hashed) entries found", path)
+	}
+
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		for _, e := range entries {
+			for _, h := range e.hosts {
+				if h == hostname || h == remote.String() {
+					if !bytes.Equal(e.key.Marshal(), key.Marshal()) {
+						return fmt.Errorf("host key mismatch for %s: key does not match known_hosts entry", hostname)
+					}
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("host key verification failed: %s not found in known_hosts", hostname)
+	}, nil
 }
 
 // Connect opens a TCP connection and completes the SSH handshake, both
 // bounded by opts.ConnectTimeout so an unreachable or black-holed device
-// can never hang the run.
-func Connect(address string, port int, username, password string, opts Options) (*ssh.Client, error) {
+// can never hang the run. It also respects ctx: cancelling ctx (e.g. on
+// SIGINT/SIGTERM) aborts an in-progress dial immediately.
+func Connect(ctx context.Context, address string, port int, username, password string, opts Options) (*ssh.Client, error) {
+	if opts.HostKeyCallback == nil {
+		return nil, ErrNoHostKeyCallback
+	}
+
 	addr := net.JoinHostPort(address, fmt.Sprintf("%d", port))
 
-	conn, err := net.DialTimeout("tcp", addr, opts.ConnectTimeout)
+	dialer := net.Dialer{Timeout: opts.ConnectTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
@@ -68,11 +133,7 @@ func Connect(address string, port int, username, password string, opts Options) 
 				return answers, nil
 			}),
 		},
-		// Backup tooling against known internal infrastructure -- host
-		// keys are not pinned here. For production hardening, replace
-		// this with ssh.FixedHostKey(...) or a callback that checks a
-		// known_hosts file you maintain for the air-gapped environment.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: opts.HostKeyCallback,
 		HostKeyAlgorithms: []string{
 			ssh.KeyAlgoED25519,
 			ssh.KeyAlgoECDSA256,
@@ -147,7 +208,16 @@ func RunCommand(client *ssh.Client, command string, opts Options) (string, error
 		return stdout.String(), nil
 
 	case <-time.After(opts.CommandTimeout):
-		session.Close() // best-effort; unblocks the goroutine above
+		// Best-effort: ask the remote process to die, then tear down the
+		// session/transport. Signal alone isn't guaranteed (not all
+		// servers honor SSH_MSG_CHANNEL_REQUEST "signal"), and Close
+		// alone can leave the goroutine above blocked if the underlying
+		// network read is stalled rather than erroring out -- closing
+		// the session's parent connection is what actually unblocks a
+		// stalled Read. Doing both maximizes the chance the goroutine
+		// exits; it is not a hard guarantee for a truly wedged peer.
+		_ = session.Signal(ssh.SIGKILL)
+		session.Close()
 		return "", fmt.Errorf("command timed out after %s", opts.CommandTimeout)
 	}
 }
