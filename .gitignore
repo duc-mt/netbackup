@@ -11,7 +11,9 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Root builds and test coverage (bin/ is tracked for offline distributions)
+# Root builds and test coverage
+bin/
 /netbackup*
 coverage.out
 *.out
+
