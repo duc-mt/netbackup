@@ -138,7 +138,7 @@ edge-rtr-01,10.30.1.1,22,juniper_junos,default
 - `port` defaults to `22`.
 - `vendor` defaults to `generic` (`show running-config`). Supported vendor keys:
   `cisco_ios`, `huawei_vrp`, `juniper_junos`, `aruba`, `ruijie`, `fortigate`,
-  `checkpoint_gaia`, `pfsense`, `vyos`, `generic`.
+  `checkpoint_gaia`, `pfsense`, `vyos`, `arista`, `generic`.
 - `credential_group` defaults to `default`. If specified as `site_hcm`, the
   tool looks for `NETBACKUP_SITE_HCM_USERNAME` and `NETBACKUP_SITE_HCM_PASSWORD`,
   falling back to `NETBACKUP_USERNAME` / `NETBACKUP_PASSWORD` if not set.

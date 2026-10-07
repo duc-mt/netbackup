@@ -60,13 +60,52 @@ func Connect(address string, port int, username, password string, opts Options) 
 		User: username,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
+			ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+				answers := make([]string, len(questions))
+				for i := range answers {
+					answers[i] = password
+				}
+				return answers, nil
+			}),
 		},
 		// Backup tooling against known internal infrastructure -- host
 		// keys are not pinned here. For production hardening, replace
 		// this with ssh.FixedHostKey(...) or a callback that checks a
 		// known_hosts file you maintain for the air-gapped environment.
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         opts.ConnectTimeout,
+		HostKeyAlgorithms: []string{
+			ssh.KeyAlgoED25519,
+			ssh.KeyAlgoECDSA256,
+			ssh.KeyAlgoECDSA384,
+			ssh.KeyAlgoECDSA521,
+			ssh.KeyAlgoRSASHA256,
+			ssh.KeyAlgoRSASHA512,
+			ssh.KeyAlgoRSA,
+			ssh.KeyAlgoDSA,
+		},
+		Timeout: opts.ConnectTimeout,
+		Config: ssh.Config{
+			Ciphers: []string{
+				"aes128-gcm@openssh.com",
+				"aes256-gcm@openssh.com",
+				"chacha20-poly1305@openssh.com",
+				"aes128-ctr",
+				"aes192-ctr",
+				"aes256-ctr",
+				"aes128-cbc",
+				"3des-cbc",
+			},
+			KeyExchanges: []string{
+				"curve25519-sha256",
+				"curve25519-sha256@libssh.org",
+				"ecdh-sha2-nistp256",
+				"ecdh-sha2-nistp384",
+				"ecdh-sha2-nistp521",
+				"diffie-hellman-group14-sha256",
+				"diffie-hellman-group14-sha1",
+				"diffie-hellman-group1-sha1",
+			},
+		},
 	}
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
@@ -153,7 +192,8 @@ func RunInteractive(client *ssh.Client, commands []string, opts Options) (string
 			return output.String(), fmt.Errorf("writing command to stdin: %w", err)
 		}
 
-		lastSize := output.Len()
+		startLen := output.Len()
+		lastSize := startLen
 		lastChange := time.Now()
 
 		for {
@@ -166,8 +206,11 @@ func RunInteractive(client *ssh.Client, commands []string, opts Options) (string
 			if size != lastSize {
 				lastSize = size
 				lastChange = time.Now()
-			} else if time.Since(lastChange) >= settle && size > 0 {
-				break // command output settled
+			} else if size > startLen && time.Since(lastChange) >= settle {
+				break // command output arrived and settled
+			} else if size == startLen && time.Since(lastChange) >= settle*2 {
+				// command produced no new output within quiet window (e.g. empty command or prompt wake)
+				break
 			}
 		}
 	}

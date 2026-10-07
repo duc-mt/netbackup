@@ -74,7 +74,7 @@ func Classify(device, stage string, err error) *Error {
 	case strings.Contains(msg, "unable to authenticate"),
 		strings.Contains(msg, "permission denied"),
 		strings.Contains(msg, "auth fail"),
-		strings.Contains(msg, "handshake failed"):
+		strings.Contains(msg, "authentication failed"):
 		return New(CategoryAuthFailed, device, stage, err)
 
 	case strings.Contains(msg, "process exited"),
@@ -82,7 +82,12 @@ func Classify(device, stage string, err error) *Error {
 		strings.Contains(msg, "exit status"):
 		return New(CategoryCommandFailed, device, stage, err)
 
-	case strings.Contains(msg, "ssh: ") || strings.Contains(msg, "session"):
+	case strings.Contains(msg, "handshake failed"),
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "no common algorithm"),
+		strings.Contains(msg, "ssh: "),
+		strings.Contains(msg, "session"):
 		return New(CategorySessionError, device, stage, err)
 	}
 

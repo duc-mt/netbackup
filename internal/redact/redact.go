@@ -53,6 +53,30 @@ var commonPatterns = []patternRule{
 		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:password|cipher|snmp-agent community (?:read|write)))\s+cipher\s+\S+`),
 		repl: `${1} cipher <REDACTED>`,
 	},
+	// TACACS+ and RADIUS server keys
+	{
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:tacacs-server|radius-server|tacacs|radius)(?:(?:\s+\S+)*?\s+key(?:\s+\d+)?))\s+\S+`),
+		repl: "${1} <REDACTED>",
+	},
+	// SNMPv3 auth and priv credentials
+	{
+		re:   regexp.MustCompile(`(?i)(\bauth\s+(?:md5|sha|sha-256|sha-384|sha-512)\s+)\S+`),
+		repl: "${1}<REDACTED>",
+	},
+	{
+		re:   regexp.MustCompile(`(?i)(\bpriv\s+(?:des|3des|aes|aes-128|aes-192|aes-256)(?:\s+\d+)?\s+)\S+`),
+		repl: "${1}<REDACTED>",
+	},
+	// VyOS SNMP community strings
+	{
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*set\s+service\s+snmp\s+community\s+)\S+(.*)`),
+		repl: "${1}<REDACTED>${2}",
+	},
+	// FortiOS SNMP community strings
+	{
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*set\s+community-name\s+)"?[^"\r\n]+"?`),
+		repl: `${1}"<REDACTED>"`,
+	},
 }
 
 // Config processes raw configuration text and replaces recognized sensitive

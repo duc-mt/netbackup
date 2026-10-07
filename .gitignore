@@ -10,3 +10,8 @@ logs/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Root builds and test coverage (bin/ is tracked for offline distributions)
+/netbackup*
+coverage.out
+*.out

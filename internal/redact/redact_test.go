@@ -22,6 +22,17 @@ set security ike proposal p1 pre-shared-secret "$9$..."
 ! Fortinet
 set password ENC 1234567890
 set preshared-key my-ipsec-psk
+set community-name "fortiSnmpSecret"
+
+! TACACS & RADIUS
+tacacs-server key 7 secretTacacsPass
+radius-server host 10.1.1.1 key radiusSecretPass
+
+! SNMPv3
+snmp-server user admin network-admin v3 auth sha MyAuthPass123 priv aes 128 MyPrivPass456
+
+! VyOS SNMP
+set service snmp community vyosCommunityRO client 10.0.0.0/8
 
 ! Private Key
 -----BEGIN RSA PRIVATE KEY-----
@@ -40,6 +51,12 @@ MIIEowIBAAKCAQEA0Y...
 		"MIIEowIBAAKCAQEA0Y...",
 		"1234567890",
 		"my-ipsec-psk",
+		"fortiSnmpSecret",
+		"secretTacacsPass",
+		"radiusSecretPass",
+		"MyAuthPass123",
+		"MyPrivPass456",
+		"vyosCommunityRO",
 	}
 
 	for _, str := range forbidden {

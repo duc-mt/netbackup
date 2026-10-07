@@ -301,9 +301,9 @@ func removeEmptyDir(dir string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
-	_, err = f.Readdirnames(1)
-	if err != nil { // empty or error
+	_, readErr := f.Readdirnames(1)
+	_ = f.Close()
+	if readErr != nil { // empty or error reading
 		_ = os.Remove(dir)
 		return true
 	}
