@@ -53,3 +53,6 @@ init:
 	fi
 	@echo "Initialization complete! Edit .env and inventory.csv to match your environment."
 
+
+run: build
+	./bin/$(BINARY)

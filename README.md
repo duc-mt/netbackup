@@ -7,6 +7,21 @@ and — because all third-party source is vendored into this package —
 no internet access to **build** either. There is nothing to download at
 any stage.
 
+## Quick Start (One-Liners)
+
+If you have `make` installed, you can use these simple one-liners:
+
+- **Initialize config:** `make init` (creates `.env` and `inventory.csv`)
+- **Build (offline):** `make build` (creates executable in `bin/`)
+- **Run backup:** `make run` (builds and runs with default settings)
+
+If you don't have `make` or the Go toolchain, you can simply run the pre-built binary:
+
+```bash
+./bin/netbackup-linux-amd64
+```
+*(By default, it looks for `inventory.csv` and `.env` in the current directory and places backups in `backups/`)*
+
 ## Fastest path: just run the binary
 
 `bin/` already contains ready-to-run, statically linked binaries. No Go
