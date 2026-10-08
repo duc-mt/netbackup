@@ -110,27 +110,15 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config) (result Resul
 	}
 	dev.Vendor = profile.Key
 
-	creds := cfg.creds(dev.CredentialGroup)
-	client, err := sshclient.Connect(ctx, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+	output, err := fetchConfig(ctx, dev, profile, cfg)
 	if err != nil {
-		cerr := errcat.Classify(dev.Hostname, "connect", err)
-		result.Err = cerr
-		result.Category = cerr.Category
-		return result
-	}
-	defer client.Close()
-
-	var output string
-	if profile.Interactive {
-		cmds := append(append([]string{}, profile.SetupCommands...), profile.BackupCommand)
-		output, err = sshclient.RunInteractive(client, cmds, cfg.SSH)
-	} else {
-		output, err = sshclient.RunCommand(client, profile.BackupCommand, cfg.SSH)
-	}
-	if err != nil {
-		cerr := errcat.Classify(dev.Hostname, "command", err)
-		result.Err = cerr
-		result.Category = cerr.Category
+		if cerr, ok := err.(*errcat.Error); ok {
+			result.Err = cerr
+			result.Category = cerr.Category
+		} else {
+			result.Err = err
+			result.Category = errcat.CategoryUnknown
+		}
 		return result
 	}
 
@@ -165,6 +153,29 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config) (result Resul
 	result.Success = true
 	result.OutputPath = path
 	return result
+}
+
+func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profile, cfg Config) (string, error) {
+	creds := cfg.creds(dev.CredentialGroup)
+	client, err := sshclient.Connect(ctx, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+	if err != nil {
+		return "", errcat.Classify(dev.Hostname, "connect", err)
+	}
+	defer client.Close()
+
+	var output string
+	if profile.Interactive {
+		cmds := make([]string, 0, len(profile.SetupCommands)+1)
+		cmds = append(cmds, profile.SetupCommands...)
+		cmds = append(cmds, profile.BackupCommand)
+		output, err = sshclient.RunInteractive(client, cmds, cfg.SSH)
+	} else {
+		output, err = sshclient.RunCommand(client, profile.BackupCommand, cfg.SSH)
+	}
+	if err != nil {
+		return "", errcat.Classify(dev.Hostname, "command", err)
+	}
+	return output, nil
 }
 
 // save writes the captured config to <outputDir>/<runName>/<vendor>/<hostname><ext>.
@@ -304,11 +315,11 @@ func removeEmptyDir(dir string) bool {
 	}
 	_, readErr := f.Readdirnames(1)
 	_ = f.Close()
-	if readErr != nil { // empty or error reading
-		_ = os.Remove(dir)
-		return true
+	if readErr == nil {
+		return false
 	}
-	return false
+	_ = os.Remove(dir)
+	return true
 }
 
 func sanitize(name string) string {

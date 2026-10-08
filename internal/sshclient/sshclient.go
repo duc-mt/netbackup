@@ -58,7 +58,7 @@ type Options struct {
 
 // ErrNoHostKeyCallback is returned by Connect when opts.HostKeyCallback is
 // nil, so callers can't accidentally run with host key checking disabled.
-var ErrNoHostKeyCallback = errors.New("sshclient: Options.HostKeyCallback is required (use LoadKnownHosts, ssh.FixedHostKey, or an explicit ssh.InsecureIgnoreHostKey())")
+var ErrNoHostKeyCallback = errors.New("sshclient: Options.HostKeyCallback is required")
 
 // LoadKnownHosts builds a HostKeyCallback from an OpenSSH-format known_hosts
 // file. It supports plain (non-hashed) host patterns; hashed "|1|..." entries

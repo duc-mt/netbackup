@@ -41,7 +41,7 @@ type Store struct {
 // if not provided.
 func NewStore(envFile string) (*Store, error) {
 	s := &Store{
-		fileVals: map[string]string{},
+		fileVals: make(map[string]string),
 	}
 	if envFile != "" {
 		vals, err := parseEnvFile(envFile)
@@ -132,7 +132,7 @@ func parseEnvFile(path string) (map[string]string, error) {
 	}
 	defer f.Close()
 
-	vals := map[string]string{}
+	vals := make(map[string]string)
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
