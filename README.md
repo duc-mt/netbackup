@@ -7,20 +7,29 @@ and — because all third-party source is vendored into this package —
 no internet access to **build** either. There is nothing to download at
 any stage.
 
-## Quick Start (One-Liners)
+## Quick Start (Universal Deployment)
 
-If you have `make` installed, you can use these simple one-liners:
+No matter what device or OS you are using (Linux, macOS, Windows, x86_64, ARM64), you don't need to remember binary names or build steps.
 
-- **Initialize config:** `make init` (creates `.env` and `inventory.csv`)
-- **Build (offline):** `make build` (creates executable in `bin/`)
-- **Run backup:** `make run` (builds and runs with default settings)
-
-If you don't have `make` or the Go toolchain, you can simply run the pre-built binary:
+### Option 1: Universal Auto-Detect Script (Linux / macOS / Windows)
+Simply execute `./run.sh` (or `run.bat` on Windows). It automatically detects your host OS and CPU architecture and launches the correct pre-built binary:
 
 ```bash
-./bin/netbackup-linux-amd64
+make init          # 1. Initialize .env and inventory.csv
+./run.sh           # 2. Automatically launches the matching pre-built binary
 ```
-*(By default, it looks for `inventory.csv` and `.env` in the current directory and places backups in `backups/`)*
+
+### Option 2: Docker / Docker Compose
+If you prefer running in a container:
+
+```bash
+docker compose up  # Builds container (if needed) and executes backup
+```
+
+### Option 3: Standard Make / Direct Binary
+- **Initialize config:** `make init`
+- **Build (offline):** `make build`
+- **Run direct binary:** `./bin/netbackup-linux-amd64` (or matching OS in `bin/`)
 
 ## Fastest path: just run the binary
 

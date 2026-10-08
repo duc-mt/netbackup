@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  netbackup:
+    build: .
+    volumes:
+      - ./inventory.csv:/app/inventory.csv:ro
+      - ./.env:/app/.env:ro
+      - ./backups:/app/backups
+      - ./logs:/app/logs
+    command: ["-inventory", "inventory.csv", "-env-file", ".env"]
