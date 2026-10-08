@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -253,5 +254,57 @@ func TestRunInteractive(t *testing.T) {
 	}
 	if !strings.Contains(output, "router-sw-01") {
 		t.Errorf("unexpected output from RunInteractive: %q", output)
+	}
+}
+
+func TestKnownHostsCallbackStrict(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer, _ := ssh.NewSignerFromKey(priv)
+	pub := signer.PublicKey()
+
+	f, _ := os.CreateTemp("", "known_hosts_strict")
+	defer os.Remove(f.Name())
+	f.Close()
+
+	cb, err := KnownHostsCallback(f.Name(), PolicyStrict)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	err = cb("127.0.0.1", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 22}, pub)
+	if err == nil {
+		t.Fatal("expected strict policy to reject unknown key, got nil")
+	}
+}
+
+func TestKnownHostsCallbackAcceptNew(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer, _ := ssh.NewSignerFromKey(priv)
+	pub := signer.PublicKey()
+
+	f, _ := os.CreateTemp("", "known_hosts_acceptnew")
+	defer os.Remove(f.Name())
+	f.Close()
+
+	cb, err := KnownHostsCallback(f.Name(), PolicyAcceptNew)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	addr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 22}
+	err = cb("127.0.0.1:22", addr, pub)
+	if err != nil {
+		t.Fatalf("expected accept-new policy to accept unknown key, got: %v", err)
+	}
+
+	content, _ := os.ReadFile(f.Name())
+	if !strings.Contains(string(content), "127.0.0.1") {
+		t.Fatalf("expected key to be written to known_hosts, file is: %s", string(content))
+	}
+
+	// second call should succeed via known key logic without re-appending
+	err = cb("127.0.0.1:22", addr, pub)
+	if err != nil {
+		t.Fatalf("expected known key to be accepted: %v", err)
 	}
 }

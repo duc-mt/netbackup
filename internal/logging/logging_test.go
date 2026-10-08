@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 func TestLogging(t *testing.T) {
 	logDir := t.TempDir()
 
-	logger, err := New(logDir)
+	logger, err := New(logDir, "text")
 	if err != nil {
 		t.Fatalf("failed to create logger: %v", err)
 	}
@@ -98,5 +99,31 @@ func TestLogging(t *testing.T) {
 		if !strings.Contains(logStr, exp) {
 			t.Errorf("log file does not contain %q\nFull log:\n%s", exp, logStr)
 		}
+	}
+}
+
+func TestLoggingJSON(t *testing.T) {
+	logDir := t.TempDir()
+
+	logger, err := New(logDir, "json")
+	if err != nil {
+		t.Fatalf("failed to create logger: %v", err)
+	}
+
+	logger.Info("info message %d", 1)
+	logger.Close()
+
+	entries, _ := os.ReadDir(logDir)
+	content, _ := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+
+	var entry logEntry
+	if err := json.Unmarshal(content, &entry); err != nil {
+		t.Fatalf("failed to parse JSON log line: %v\nLine: %s", err, string(content))
+	}
+	if entry.Level != "INFO" {
+		t.Errorf("expected level INFO, got %s", entry.Level)
+	}
+	if entry.Message != "info message 1" {
+		t.Errorf("expected message 'info message 1', got %s", entry.Message)
 	}
 }

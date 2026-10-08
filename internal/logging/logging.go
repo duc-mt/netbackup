@@ -4,11 +4,13 @@
 package logging
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"netbackup/internal/backup"
@@ -16,13 +18,14 @@ import (
 )
 
 type Logger struct {
-	out io.Writer // console (stderr)
-	f   *os.File  // log file, kept open for the run's duration
+	out    io.Writer // console (stderr)
+	f      *os.File  // log file, kept open for the run's duration
+	format string
 }
 
 // New creates the log directory if needed and opens a timestamped log file
 // for this run, writing every line to both the file and the console.
-func New(logDir string) (*Logger, error) {
+func New(logDir, format string) (*Logger, error) {
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return nil, fmt.Errorf("creating log dir: %w", err)
 	}
@@ -31,13 +34,32 @@ func New(logDir string) (*Logger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening log file: %w", err)
 	}
-	return &Logger{out: os.Stderr, f: f}, nil
+	if format == "" {
+		format = "text"
+	}
+	return &Logger{out: os.Stderr, f: f, format: strings.ToLower(format)}, nil
 }
 
 func (l *Logger) Close() error { return l.f.Close() }
 
+type logEntry struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+}
+
 func (l *Logger) line(level, msg string) {
-	entry := fmt.Sprintf("%s [%s] %s\n", time.Now().Format(time.RFC3339), level, msg)
+	var entry string
+	if l.format == "json" {
+		b, _ := json.Marshal(logEntry{
+			Timestamp: time.Now().Format(time.RFC3339),
+			Level:     level,
+			Message:   msg,
+		})
+		entry = string(b) + "\n"
+	} else {
+		entry = fmt.Sprintf("%s [%s] %s\n", time.Now().Format(time.RFC3339), level, msg)
+	}
 	fmt.Fprint(l.out, entry)
 	fmt.Fprint(l.f, entry)
 }

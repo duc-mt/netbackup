@@ -35,6 +35,7 @@ type cliOptions struct {
 	inventoryPath         string
 	outputDir             string
 	logDir                string
+	logFormat             string
 	envFile               string
 	concurrency           int
 	connectTimeout        time.Duration
@@ -44,6 +45,7 @@ type cliOptions struct {
 	retentionCount        int
 	retentionDays         int
 	knownHostsPath        string
+	knownHostsPolicy      string
 	insecureIgnoreHostKey bool
 }
 
@@ -52,6 +54,7 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.inventoryPath, "inventory", "inventory.csv", "path to the device inventory CSV file")
 	flag.StringVar(&opts.outputDir, "out", "backups", "directory to write backup files into")
 	flag.StringVar(&opts.logDir, "log-dir", "logs", "directory to write run logs into")
+	flag.StringVar(&opts.logFormat, "log-format", "text", "log output format (text or json)")
 	flag.StringVar(&opts.envFile, "env-file", ".env", "path to an optional .env file holding NETBACKUP_USERNAME / NETBACKUP_PASSWORD")
 	flag.IntVar(&opts.concurrency, "concurrency", 5, "maximum number of devices to back up in parallel")
 	flag.DurationVar(&opts.connectTimeout, "connect-timeout", 10*time.Second, "TCP connect + SSH handshake timeout per device")
@@ -61,6 +64,7 @@ func parseFlags() cliOptions {
 	flag.IntVar(&opts.retentionCount, "retention-count", 0, "maximum number of recent backups to keep per device (0 to disable)")
 	flag.IntVar(&opts.retentionDays, "retention-days", 0, "prune backups older than N days per device (0 to disable)")
 	flag.StringVar(&opts.knownHostsPath, "known-hosts", "known_hosts", "path to an OpenSSH known_hosts file used to verify device host keys")
+	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for unknown host keys: 'strict' or 'accept-new'")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
 	flag.Parse()
 	return opts
@@ -75,7 +79,7 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger, err := logging.New(opts.logDir)
+	logger, err := logging.New(opts.logDir, opts.logFormat)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		return 1
@@ -103,9 +107,10 @@ func run() int {
 		logger.Warn("host key verification disabled via -insecure-ignore-host-key -- connections are vulnerable to MITM")
 		hostKeyCallback = ssh.InsecureIgnoreHostKey()
 	} else {
-		hostKeyCallback, err = sshclient.LoadKnownHosts(opts.knownHostsPath)
+		policy := sshclient.KnownHostsPolicy(opts.knownHostsPolicy)
+		hostKeyCallback, err = sshclient.KnownHostsCallback(opts.knownHostsPath, policy)
 		if err != nil {
-			logger.Error("loading known_hosts: %v (populate -known-hosts, or pass -insecure-ignore-host-key to explicitly disable verification)", err)
+			logger.Error("loading known_hosts: %v", err)
 			return 1
 		}
 	}

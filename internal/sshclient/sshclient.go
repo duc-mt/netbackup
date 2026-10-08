@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type safeBuffer struct {
@@ -60,47 +61,79 @@ type Options struct {
 // nil, so callers can't accidentally run with host key checking disabled.
 var ErrNoHostKeyCallback = errors.New("sshclient: Options.HostKeyCallback is required")
 
-// LoadKnownHosts builds a HostKeyCallback from an OpenSSH-format known_hosts
-// file. It supports plain (non-hashed) host patterns; hashed "|1|..." entries
-// are skipped. The callback matches on the hostname/address as passed to
-// Connect (not on resolved IP), mirroring how the entries are usually added.
-func LoadKnownHosts(path string) (ssh.HostKeyCallback, error) {
-	data, err := os.ReadFile(path)
+// KnownHostsPolicy defines how unknown host keys are handled.
+type KnownHostsPolicy string
+
+const (
+	PolicyStrict    KnownHostsPolicy = "strict"     // reject unknown keys
+	PolicyAcceptNew KnownHostsPolicy = "accept-new" // add unknown keys to the known_hosts file
+)
+
+// KnownHostsCallback builds a HostKeyCallback from an OpenSSH-format known_hosts
+// file and enforces the given policy (strict or accept-new).
+func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallback, error) {
+	if policy != PolicyStrict && policy != PolicyAcceptNew {
+		return nil, fmt.Errorf("invalid known_hosts policy: %q", policy)
+	}
+
+	// Create file if it doesn't exist
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		f, err := os.OpenFile(path, os.O_CREATE, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("creating known_hosts %q: %w", path, err)
+		}
+		f.Close()
+	}
+
+	checker, err := knownhosts.New(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading known_hosts %q: %w", path, err)
 	}
 
-	type entry struct {
-		hosts []string
-		key   ssh.PublicKey
-	}
-	var entries []entry
-
-	rest := data
-	for len(rest) > 0 {
-		_, hosts, pubKey, _, remainder, err := ssh.ParseKnownHosts(rest)
-		if err != nil {
-			break // end of parseable entries (blank lines, comments, EOF)
-		}
-		entries = append(entries, entry{hosts: hosts, key: pubKey})
-		rest = remainder
-	}
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("known_hosts %q: no usable (non-hashed) entries found", path)
-	}
+	var mu sync.Mutex // protects concurrent writes to the known_hosts file
 
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		for _, e := range entries {
-			for _, h := range e.hosts {
-				if h == hostname || h == remote.String() {
-					if !bytes.Equal(e.key.Marshal(), key.Marshal()) {
-						return fmt.Errorf("host key mismatch for %s: key does not match known_hosts entry", hostname)
-					}
-					return nil
-				}
-			}
+		err := checker(hostname, remote, key)
+		if err == nil {
+			return nil // Key is known and matches
 		}
-		return fmt.Errorf("host key verification failed: %s not found in known_hosts", hostname)
+
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) && len(keyErr.Want) == 0 {
+			// The key is completely unknown
+			if policy == PolicyAcceptNew {
+				mu.Lock()
+				defer mu.Unlock()
+				// We must re-check inside the lock to avoid races where another goroutine just added it
+				checkerReloaded, err := knownhosts.New(path)
+				if err == nil {
+					if err := checkerReloaded(hostname, remote, key); err == nil {
+						return nil
+					}
+				}
+
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				if err != nil {
+					return fmt.Errorf("failed to open known_hosts to accept new key: %w", err)
+				}
+				defer f.Close()
+
+				line := knownhosts.Line([]string{hostname}, key)
+				if _, err := f.WriteString(line + "\n"); err != nil {
+					return fmt.Errorf("failed to write new key to known_hosts: %w", err)
+				}
+
+				// Re-initialize checker so subsequent connections in this run use the updated file
+				if c, err := knownhosts.New(path); err == nil {
+					checker = c
+				}
+				return nil
+			}
+			return fmt.Errorf("host key verification failed: %s not found in known_hosts (policy=%s)", hostname, policy)
+		}
+
+		// Key mismatch (mitm or changed key)
+		return fmt.Errorf("host key verification failed for %s: %w", hostname, err)
 	}, nil
 }
 
@@ -208,14 +241,6 @@ func RunCommand(client *ssh.Client, command string, opts Options) (string, error
 		return stdout.String(), nil
 
 	case <-time.After(opts.CommandTimeout):
-		// Best-effort: ask the remote process to die, then tear down the
-		// session/transport. Signal alone isn't guaranteed (not all
-		// servers honor SSH_MSG_CHANNEL_REQUEST "signal"), and Close
-		// alone can leave the goroutine above blocked if the underlying
-		// network read is stalled rather than erroring out -- closing
-		// the session's parent connection is what actually unblocks a
-		// stalled Read. Doing both maximizes the chance the goroutine
-		// exits; it is not a hard guarantee for a truly wedged peer.
 		_ = session.Signal(ssh.SIGKILL)
 		session.Close()
 		return "", fmt.Errorf("command timed out after %s", opts.CommandTimeout)
