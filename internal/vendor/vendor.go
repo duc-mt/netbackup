@@ -124,6 +124,21 @@ var Profiles = map[string]Profile{
 		FileExtension: ".cfg",
 	},
 	// Fallback for anything not explicitly mapped yet.
+	"paloalto": {
+		Key:           "paloalto",
+		Name:          "Palo Alto PAN-OS",
+		Interactive:   false,
+		BackupCommand: "show config running",
+		FileExtension: ".cfg",
+	},
+	"sophos": {
+		Key:           "sophos",
+		Name:          "Sophos",
+		Interactive:   true,
+		SetupCommands: []string{"4"}, // Select Device Console in menu
+		BackupCommand: "show network interfaces", // Basic config dump fallback for XG
+		FileExtension: ".cfg",
+	},
 	"generic": {
 		Key:           "generic",
 		Name:          "Generic / unspecified",
@@ -179,6 +194,16 @@ var aliases = map[string]string{
 
 	// pfSense
 	"pfsense": "pfsense",
+
+	// Palo Alto
+	"paloalto": "paloalto",
+	"panos": "paloalto",
+	"pan_os": "paloalto",
+
+	// Sophos
+	"sophos": "sophos",
+	"sophos_xg": "sophos",
+	"sfos": "sophos",
 
 	// VyOS
 	"vyos": "vyos",
