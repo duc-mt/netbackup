@@ -135,7 +135,7 @@ var Profiles = map[string]Profile{
 		Key:           "sophos",
 		Name:          "Sophos",
 		Interactive:   true,
-		SetupCommands: []string{"4"}, // Select Device Console in menu
+		SetupCommands: []string{"4"},             // Select Device Console in menu
 		BackupCommand: "show network interfaces", // Basic config dump fallback for XG
 		FileExtension: ".cfg",
 	},
@@ -197,13 +197,13 @@ var aliases = map[string]string{
 
 	// Palo Alto
 	"paloalto": "paloalto",
-	"panos": "paloalto",
-	"pan_os": "paloalto",
+	"panos":    "paloalto",
+	"pan_os":   "paloalto",
 
 	// Sophos
-	"sophos": "sophos",
+	"sophos":    "sophos",
 	"sophos_xg": "sophos",
-	"sfos": "sophos",
+	"sfos":      "sophos",
 
 	// VyOS
 	"vyos": "vyos",
