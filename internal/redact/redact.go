@@ -1,3 +1,13 @@
+// ==============================================================================
+// Package main implements Implementation and logic for redact..
+// Author:        Mai Tan Duc <ducmai.network@gmail.com>
+// Created:       2026-10-10
+// Version:       1.0.0
+// License:       MIT
+// ==============================================================================
+// Usage:         go run redact.go [options]
+// Notes:         Go package implementation
+// ==============================================================================
 // Package redact provides sensitive data sanitization for network device
 // configurations, masking passwords, hashes, pre-shared keys, and SNMP
 // community strings before saving configurations to disk.

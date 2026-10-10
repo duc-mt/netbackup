@@ -1,3 +1,13 @@
+// ==============================================================================
+// Package main implements Implementation and logic for logging..
+// Author:        Mai Tan Duc <ducmai.network@gmail.com>
+// Created:       2026-10-10
+// Version:       1.0.0
+// License:       MIT
+// ==============================================================================
+// Usage:         go run logging.go [options]
+// Notes:         Go package implementation
+// ==============================================================================
 // Package logging provides minimal, dependency-free leveled logging plus an
 // end-of-run summary -- what an operator needs to answer "what ran, what
 // failed, and why" without grepping raw stack traces.

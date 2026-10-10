@@ -1,3 +1,13 @@
+// ==============================================================================
+// Package main implements Implementation and logic for inventory..
+// Author:        Mai Tan Duc <ducmai.network@gmail.com>
+// Created:       2026-10-10
+// Version:       1.0.0
+// License:       MIT
+// ==============================================================================
+// Usage:         go run inventory.go [options]
+// Notes:         Go package implementation
+// ==============================================================================
 // Package inventory loads the list of target devices from a plain CSV file,
 // so the device list lives outside the binary and can be edited on the
 // air-gapped host with nothing more than a text editor.

@@ -1,3 +1,13 @@
+// ==============================================================================
+// Package main implements Implementation and logic for main..
+// Author:        Mai Tan Duc <ducmai.network@gmail.com>
+// Created:       2026-10-10
+// Version:       1.0.0
+// License:       MIT
+// ==============================================================================
+// Usage:         go run main.go [options]
+// Notes:         Go package implementation
+// ==============================================================================
 // Command netbackup backs up running configurations from a list of network
 // devices over SSH. It is built to run as a single static binary with no
 // runtime dependencies, for use on air-gapped management networks.

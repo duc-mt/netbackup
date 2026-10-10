@@ -1,3 +1,13 @@
+// ==============================================================================
+// Package main implements Implementation and logic for errcat..
+// Author:        Mai Tan Duc <ducmai.network@gmail.com>
+// Created:       2026-10-10
+// Version:       1.0.0
+// License:       MIT
+// ==============================================================================
+// Usage:         go run errcat.go [options]
+// Notes:         Go package implementation
+// ==============================================================================
 // Package errcat classifies failures into a small set of operator-facing
 // categories so the final run summary says *why* a device failed, not just
 // that it failed.

@@ -1,3 +1,13 @@
+// ==============================================================================
+// Package main implements Implementation and logic for sshclient..
+// Author:        Mai Tan Duc <ducmai.network@gmail.com>
+// Created:       2026-10-10
+// Version:       1.0.0
+// License:       MIT
+// ==============================================================================
+// Usage:         go run sshclient.go [options]
+// Notes:         Go package implementation
+// ==============================================================================
 // Package sshclient wraps golang.org/x/crypto/ssh with the two things a
 // backup tool actually needs on top of it: hard timeouts at every stage
 // (dial, handshake, command execution) and two execution strategies

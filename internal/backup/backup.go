@@ -1,3 +1,13 @@
+// ==============================================================================
+// Package main implements Implementation and logic for backup..
+// Author:        Mai Tan Duc <ducmai.network@gmail.com>
+// Created:       2026-10-10
+// Version:       1.0.0
+// License:       MIT
+// ==============================================================================
+// Usage:         go run backup.go [options]
+// Notes:         Go package implementation
+// ==============================================================================
 // Package backup ties inventory, credentials, vendor profiles and the SSH
 // client together: for each device, connect, run the right backup command,
 // write the result to disk, and report what happened -- without ever
