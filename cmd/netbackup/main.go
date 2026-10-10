@@ -34,6 +34,7 @@ import (
 	"netbackup/internal/credentials"
 	"netbackup/internal/inventory"
 	"netbackup/internal/logging"
+	"netbackup/internal/report"
 	"netbackup/internal/sshclient"
 )
 
@@ -57,6 +58,7 @@ type cliOptions struct {
 	knownHostsPath        string
 	knownHostsPolicy      string
 	insecureIgnoreHostKey bool
+	resultTable           bool
 }
 
 func parseFlags() cliOptions {
@@ -76,6 +78,7 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.knownHostsPath, "known-hosts", "known_hosts", "path to an OpenSSH known_hosts file used to verify device host keys")
 	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for unknown host keys: 'strict' or 'accept-new'")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
+	flag.BoolVar(&opts.resultTable, "result-table", true, "print a colorized per-device result table to stdout after the run")
 	flag.Parse()
 	return opts
 }
@@ -145,6 +148,14 @@ func run() int {
 
 	results := backup.RunAll(ctx, devices, cfg)
 	failures := logger.Summary(results)
+
+	// The log summary above is for the run log (file + stderr, plain
+	// text, machine-greppable). This table is a separate, human-facing
+	// view on stdout; it never aborts the run even if rendering itself
+	// goes wrong, so it's safe to always attempt.
+	if opts.resultTable {
+		report.PrintSummaryTable(report.FromResults(results))
+	}
 
 	if failures > 0 {
 		return 2 // distinct from the "fatal config error" exit code 1
