@@ -145,6 +145,25 @@ chmod 600 .env
 | `-save-unchanged` | `false` | Save new file even if configuration is identical to previous backup |
 | `-retention-count`| `0` | Max backups to keep per device (`0` = disabled) |
 | `-retention-days` | `0` | Delete backups older than N days (`0` = disabled) |
+| `-result-table`   | `true`  | Display colorized summary table on terminal (`NO_COLOR` to disable) |
+
+### Run Summary Table
+
+When `-result-table=true` (or when running via `./run.sh` / `run.bat`), netbackup outputs a summary table featuring rounded box borders (`╭ ╮ ╰ ╯`), colorized status badges, and right-aligned metrics:
+
+```text
+╭─────────────────────────┬──────────────────┬───────────────┬───────────┬──────────┬──────────────────────────────────────────────────╮
+│ HOSTNAME/IP             │ PLATFORM         │ STATUS        │ FILE SIZE │ DURATION │ ERROR                                            │
+├─────────────────────────┼──────────────────┼───────────────┼───────────┼──────────┼──────────────────────────────────────────────────┤
+│ core-sw01 (10.0.1.1)    │ cisco_ios        │ ✔ SUCCESS     │ 44.82 KiB │    3.42s │ -                                                │
+│ edge-rtr02 (10.0.2.5)   │ juniper_junos    │ ✔ UNCHANGED   │         - │    2.10s │ -                                                │
+│ fw-dc01 (10.0.3.10)     │ fortinet_fortios │ ✖ AUTH FAILED │         - │    1.05s │ ssh: unable to authenticate, attempted methods … │
+│ sw-branch09 (10.0.9.2)  │ arista_eos       │ ⏱ TIMEOUT     │         - │   30.00s │ command timed out after 30s                      │
+│ sw-branch14 (10.0.14.3) │ cisco_ios        │ ✖ FAILED      │         - │    0.87s │ no route to host                                 │
+╰─────────────────────────┴──────────────────┴───────────────┴───────────┴──────────┴──────────────────────────────────────────────────╯
+
+  ✔ Succeeded: 2  │  ✖ Failed: 3  │  (total 5)
+```
 
 Exit codes: `0` = every device succeeded, `1` = fatal startup error
 (bad inventory path, invalid credentials), `2` = ran to completion but one
