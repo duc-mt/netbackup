@@ -152,6 +152,20 @@ type tableRow struct {
 	statusColor string
 }
 
+func statusWithIcon(status string) string {
+	s := strings.ToUpper(status)
+	switch {
+	case strings.Contains(s, "SUCCESS"), strings.Contains(s, "UNCHANGED"), strings.Contains(s, "SAVED"), strings.Contains(s, "OK"):
+		return "✔ " + status
+	case strings.Contains(s, "TIMEOUT"):
+		return "⏱ " + status
+	case strings.Contains(s, "AUTH"), strings.Contains(s, "FAIL"), strings.Contains(s, "ERROR"):
+		return "✖ " + status
+	default:
+		return status
+	}
+}
+
 // buildRow formats one BackupResult into display cells. It never panics:
 // a formatting failure is recorded as a warning and the cell falls back
 // to "N/A", so one malformed result can't stop the rest of the table
@@ -162,7 +176,7 @@ func buildRow(r BackupResult) (tableRow, []string) {
 
 	row.cells[0] = orDash(r.HostnameIP)
 	row.cells[1] = orDash(r.Platform)
-	row.cells[2] = orDash(r.Status)
+	row.cells[2] = statusWithIcon(orDash(r.Status))
 
 	size, err := FormatFileSize(r.FileSize)
 	if err != nil {
@@ -224,13 +238,42 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 	}
 
 	widths := columnWidths(rows)
-	writeBorder(out, widths, "┌", "┬", "┐")
+	writeBorder(out, widths, "╭", "┬", "╮")
 	writeHeader(out, widths)
 	writeBorder(out, widths, "├", "┼", "┤")
 	for _, row := range rows {
 		writeRow(out, widths, row, colorize)
 	}
-	writeBorder(out, widths, "└", "┴", "┘")
+	writeBorder(out, widths, "╰", "┴", "╯")
+
+	if len(results) > 0 {
+		var succeeded, failed int
+		for _, r := range results {
+			s := strings.ToUpper(r.Status)
+			switch {
+			case strings.Contains(s, "SUCCESS"), strings.Contains(s, "UNCHANGED"), strings.Contains(s, "SAVED"), strings.Contains(s, "OK"):
+				succeeded++
+			default:
+				failed++
+			}
+		}
+		green := func(s string) string {
+			if colorize {
+				return ansiGreen + s + ansiReset
+			}
+			return s
+		}
+		red := func(s string) string {
+			if colorize {
+				return ansiRed + s + ansiReset
+			}
+			return s
+		}
+		fmt.Fprintf(out, "\n  %s  │  %s  │  (total %d)\n",
+			green(fmt.Sprintf("✔ Succeeded: %d", succeeded)),
+			red(fmt.Sprintf("✖ Failed: %d", failed)),
+			len(results))
+	}
 }
 
 func columnWidths(rows []tableRow) [6]int {
@@ -262,7 +305,8 @@ func writeBorder(w io.Writer, widths [6]int, left, mid, right string) {
 func writeHeader(w io.Writer, widths [6]int) {
 	fmt.Fprint(w, "│")
 	for i, h := range tableColumns {
-		fmt.Fprintf(w, " %s │", padRight(h, widths[i]))
+		alignRight := (i == 3 || i == 4)
+		fmt.Fprintf(w, " %s │", padCell(h, widths[i], alignRight))
 	}
 	fmt.Fprintln(w)
 }
@@ -270,7 +314,8 @@ func writeHeader(w io.Writer, widths [6]int) {
 func writeRow(w io.Writer, widths [6]int, row tableRow, colorize bool) {
 	fmt.Fprint(w, "│")
 	for i, cell := range row.cells {
-		text := padRight(cell, widths[i])
+		alignRight := (i == 3 || i == 4)
+		text := padCell(cell, widths[i], alignRight)
 		if colorize && i == 2 && row.statusColor != "" {
 			text = row.statusColor + text + ansiReset
 		}
@@ -279,14 +324,16 @@ func writeRow(w io.Writer, widths [6]int, row tableRow, colorize bool) {
 	fmt.Fprintln(w)
 }
 
-// padRight pads s with spaces up to width, counting runes rather than
-// bytes so multi-byte hostnames/platform names still line up.
-func padRight(s string, width int) string {
+func padCell(s string, width int, alignRight bool) string {
 	n := utf8.RuneCountInString(s)
 	if n >= width {
 		return s
 	}
-	return s + strings.Repeat(" ", width-n)
+	pad := strings.Repeat(" ", width-n)
+	if alignRight {
+		return pad + s
+	}
+	return s + pad
 }
 
 // MockResults returns illustrative sample data covering success,
