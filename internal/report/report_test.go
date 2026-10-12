@@ -205,4 +205,3 @@ func TestTableWithDiffColumn(t *testing.T) {
 		t.Errorf("expected table to contain '+2/-1', got:\n%s", tableStr)
 	}
 }
-

@@ -177,4 +177,3 @@ func TestDiffBlockColors(t *testing.T) {
 		t.Errorf("log file missing '-' line: %s", fileStr)
 	}
 }
-
