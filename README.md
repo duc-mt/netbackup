@@ -146,6 +146,10 @@ chmod 600 .env
 | `-retention-count`| `0` | Max backups to keep per device (`0` = disabled) |
 | `-retention-days` | `0` | Delete backups older than N days (`0` = disabled) |
 | `-result-table`   | `true`  | Display colorized summary table on terminal (`NO_COLOR` to disable) |
+| `-jump`           | `true`  | Enable bastion/jump host routing (`-jump=false` connects directly) |
+| `-jump-host`      | `""`    | Global default bastion `host[:port]` |
+| `-jump-user`      | `""`    | SSH username for global bastion (overrides `NETBACKUP_JUMP_USERNAME`) |
+| `-jump-password`  | `""`    | SSH password for global bastion (overrides `NETBACKUP_JUMP_PASSWORD`) |
 
 ### Run Summary Table
 
@@ -172,10 +176,10 @@ or more devices failed (check logs for details).
 ## Inventory & Multi-Site Credentials
 
 ```csv
-hostname,address,port,vendor,credential_group
-core-sw-01,10.10.1.1,22,cisco_ios,site_hcm
-dc-fw-01,10.20.1.1,22,fortigate,site_dc
-edge-rtr-01,10.30.1.1,22,juniper_junos,default
+hostname,address,port,vendor,credential_group,jump_host
+core-sw-01,10.10.1.1,22,cisco_ios,site_hcm,
+dc-fw-01,10.20.1.1,22,fortigate,site_dc,bastion-dc
+edge-rtr-01,10.30.1.1,22,juniper_junos,default,mgmt-gw.corp.com:22
 ```
 
 - `port` defaults to `22`.
@@ -185,6 +189,12 @@ edge-rtr-01,10.30.1.1,22,juniper_junos,default
 - `credential_group` defaults to `default`. If specified as `site_hcm`, the
   tool looks for `NETBACKUP_SITE_HCM_USERNAME` and `NETBACKUP_SITE_HCM_PASSWORD`,
   falling back to `NETBACKUP_USERNAME` / `NETBACKUP_PASSWORD` if not set.
+- `jump_host` (optional):
+  - Blank: connects directly (or uses global `-jump-host` / `NETBACKUP_JUMP_HOST` if set).
+  - Named bastion (e.g. `bastion-dc`): resolves from `NETBACKUP_JUMP_BASTION_DC_HOST`, `_USERNAME`, `_PASSWORD`.
+  - Direct host/port (e.g. `mgmt-gw.corp.com:22`): dials that address as the bastion.
+  - Disable all jump routing on demand with `-jump=false`.
+
 
 ## Development, Maintenance & Expansion
 
