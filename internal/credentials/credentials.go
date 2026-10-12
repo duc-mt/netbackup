@@ -36,7 +36,7 @@ const (
 	// Global jump / bastion host defaults.  Per-named-jump credentials use
 	// NETBACKUP_JUMP_<NAME>_USERNAME / _PASSWORD (same group-key pattern as
 	// device credentials).
-	EnvJumpHost     = "NETBACKUP_JUMP_HOST"     // host[:port], e.g. bastion.example.com:22
+	EnvJumpHost     = "NETBACKUP_JUMP_HOST" // host[:port], e.g. bastion.example.com:22
 	EnvJumpUsername = "NETBACKUP_JUMP_USERNAME"
 	EnvJumpPassword = "NETBACKUP_JUMP_PASSWORD"
 )
