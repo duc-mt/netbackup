@@ -43,9 +43,9 @@ var commonPatterns = []patternRule{
 		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:crypto\s+isakmp\s+key|pre-shared-key|preshared-key|key)\s+(?:0|5|6|7)?)\s*\S+`),
 		repl: "${1} <REDACTED>",
 	},
-	// Juniper Junos encrypted passwords & secrets
+	// Juniper Junos & VyOS encrypted passwords & secrets
 	{
-		re:   regexp.MustCompile(`(?i)(?m)(encrypted-password|pre-shared-secret)\s+"?[^";]+"?`),
+		re:   regexp.MustCompile(`(?i)(?m)(encrypted-password|pre-shared-secret)\s+['"]?[^'";\r\n]+['"]?`),
 		repl: `${1} "<REDACTED>"`,
 	},
 	// Juniper SNMP communities

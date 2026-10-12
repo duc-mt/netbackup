@@ -41,8 +41,10 @@ radius-server host 10.1.1.1 key radiusSecretPass
 ! SNMPv3
 snmp-server user admin network-admin v3 auth sha MyAuthPass123 priv aes 128 MyPrivPass456
 
-! VyOS SNMP
+! VyOS SNMP & User Login
 set service snmp community vyosCommunityRO client 10.0.0.0/8
+set system login user netadmin authentication encrypted-password '$6$rounds=5000$vyosSecretHash'
+set system login user netadmin level 'admin'
 
 ! Private Key
 -----BEGIN RSA PRIVATE KEY-----
@@ -67,12 +69,17 @@ MIIEowIBAAKCAQEA0Y...
 		"MyAuthPass123",
 		"MyPrivPass456",
 		"vyosCommunityRO",
+		"$6$rounds=5000$vyosSecretHash",
 	}
 
 	for _, str := range forbidden {
 		if strings.Contains(redacted, str) {
 			t.Errorf("expected string %q to be redacted, but found in output:\n%s", str, redacted)
 		}
+	}
+
+	if !strings.Contains(redacted, "set system login user netadmin level 'admin'") {
+		t.Errorf("expected subsequent commands to be preserved, but missing from output:\n%s", redacted)
 	}
 
 	if !strings.Contains(redacted, "<REDACTED>") {
