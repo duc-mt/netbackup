@@ -18,12 +18,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"netbackup/internal/credentials"
 	"netbackup/internal/errcat"
@@ -45,6 +48,81 @@ type Config struct {
 	RetentionDays  int
 	SaveUnchanged  bool
 	SSH            sshclient.Options
+
+	// JumpEnabled globally enables or disables bastion / jump host routing.
+	// When false every device is connected directly, ignoring both the
+	// inventory jump_host column and JumpDefaultHost (useful for running from
+	// the management server itself, or for debugging connectivity issues).
+	JumpEnabled bool
+
+	// JumpDefaultHost is the global CLI -jump-host value (host[:port]).
+	// It is the fallback when a device's inventory jump_host name has no
+	// matching NETBACKUP_JUMP_<NAME>_HOST env var.  Empty = no global jump.
+	JumpDefaultHost string
+}
+
+// jumpPool maintains a lazily-initialised, shared *ssh.Client per unique
+// bastion address. (*ssh.Client).Dial is concurrency-safe, so workers can
+// share the same bastion client without locking.
+type jumpPool struct {
+	mu      sync.Mutex
+	clients map[string]*ssh.Client // keyed by "host:port"
+	opts    sshclient.Options
+}
+
+func newJumpPool(opts sshclient.Options) *jumpPool {
+	return &jumpPool{
+		clients: make(map[string]*ssh.Client),
+		opts:    opts,
+	}
+}
+
+// get returns (or lazily creates) the bastion client for addr.
+// addr must be in "host:port" form.
+func (p *jumpPool) get(ctx context.Context, addr, username, password string) (*ssh.Client, error) {
+	p.mu.Lock()
+	if c, ok := p.clients[addr]; ok {
+		p.mu.Unlock()
+		return c, nil
+	}
+	p.mu.Unlock()
+
+	// Parse host:port
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Treat as host-only with default port 22
+		host = addr
+		portStr = "22"
+	}
+	port := 22
+	if n, err := fmt.Sscanf(portStr, "%d", &port); n != 1 || err != nil {
+		port = 22
+	}
+
+	c, err := sshclient.ConnectJumpHost(ctx, host, port, username, password, p.opts)
+	if err != nil {
+		return nil, err
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Re-check in case another goroutine raced us.
+	if existing, ok := p.clients[addr]; ok {
+		c.Close()
+		return existing, nil
+	}
+	p.clients[addr] = c
+	return c, nil
+}
+
+// closeAll closes every cached bastion client.
+func (p *jumpPool) closeAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for addr, c := range p.clients {
+		c.Close()
+		delete(p.clients, addr)
+	}
 }
 
 func (c *Config) creds(group string) credentials.Credentials {
@@ -77,6 +155,9 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 		cfg.RunName = "backup-" + time.Now().Format("2006-01-02-1504")
 	}
 
+	pool := newJumpPool(cfg.SSH)
+	defer pool.closeAll()
+
 	results := make([]Result, len(devices))
 	sem := make(chan struct{}, cfg.Concurrency)
 	var wg sync.WaitGroup
@@ -87,7 +168,7 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 		go func(i int, dev inventory.Device) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i] = runOne(ctx, dev, cfg)
+			results[i] = runOne(ctx, dev, cfg, pool)
 		}(i, dev)
 	}
 
@@ -99,7 +180,7 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 // depth on top of the already-careful error handling below: a bug in a
 // dependency, or an unexpected nil somewhere, still must not crash the
 // whole batch -- it should surface as one failed device instead.
-func runOne(ctx context.Context, dev inventory.Device, cfg Config) (result Result) {
+func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPool) (result Result) {
 	start := time.Now()
 	result = Result{Device: dev}
 
@@ -120,7 +201,7 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config) (result Resul
 	}
 	dev.Vendor = profile.Key
 
-	output, err := fetchConfig(ctx, dev, profile, cfg)
+	output, err := fetchConfig(ctx, dev, profile, cfg, pool)
 	if err != nil {
 		if cerr, ok := err.(*errcat.Error); ok {
 			result.Err = cerr
@@ -165,9 +246,73 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config) (result Resul
 	return result
 }
 
-func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profile, cfg Config) (string, error) {
+// resolveJumpAddr returns the effective bastion address for a device, using
+// the following priority:
+//  1. Per-device inventory jump_host name → NETBACKUP_JUMP_<NAME>_HOST env var
+//  2. Per-device inventory jump_host name → same name used verbatim as host[:port]
+//  3. cfg.JumpDefaultHost (from the -jump-host CLI flag)
+//  4. Global NETBACKUP_JUMP_HOST env var (already in store.JumpDefaults().Host)
+//
+// Returns "" if jump is disabled (cfg.JumpEnabled == false) or no jump host
+// is configured for this device.
+func resolveJumpAddr(dev inventory.Device, cfg Config) string {
+	if !cfg.JumpEnabled {
+		return "" // jump globally disabled; connect every device directly
+	}
+	if dev.JumpHost != "" {
+		if cfg.CredStore != nil {
+			jc := cfg.CredStore.ForJumpHost(dev.JumpHost)
+			if jc.Host != "" {
+				return jc.Host
+			}
+		}
+		// Treat the inventory value itself as host[:port]
+		return dev.JumpHost
+	}
+	// Fall back to global CLI flag / env
+	if cfg.JumpDefaultHost != "" {
+		return cfg.JumpDefaultHost
+	}
+	if cfg.CredStore != nil {
+		if h := cfg.CredStore.JumpDefaults().Host; h != "" {
+			return h
+		}
+	}
+	return ""
+}
+
+func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profile, cfg Config, pool *jumpPool) (string, error) {
 	creds := cfg.creds(dev.CredentialGroup)
-	client, err := sshclient.Connect(ctx, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+
+	var client *ssh.Client
+	var err error
+
+	jumpAddr := resolveJumpAddr(dev, cfg)
+	if jumpAddr != "" {
+		// Resolve jump credentials: per-named-jump first, then global defaults.
+		var jumpUser, jumpPass string
+		if dev.JumpHost != "" && cfg.CredStore != nil {
+			jc := cfg.CredStore.ForJumpHost(dev.JumpHost)
+			jumpUser = jc.Username
+			jumpPass = jc.Password
+		} else if cfg.CredStore != nil {
+			jd := cfg.CredStore.JumpDefaults()
+			jumpUser = jd.Username
+			jumpPass = jd.Password
+		}
+		// Final fallback: use device credentials for the bastion too.
+		if jumpUser == "" {
+			jumpUser = creds.Username
+		}
+
+		jumpClient, err := pool.get(ctx, jumpAddr, jumpUser, jumpPass)
+		if err != nil {
+			return "", errcat.Classify(dev.Hostname, "connect-jump", fmt.Errorf("bastion %s: %w", jumpAddr, err))
+		}
+		client, err = sshclient.ConnectViaJump(ctx, jumpClient, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+	} else {
+		client, err = sshclient.Connect(ctx, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+	}
 	if err != nil {
 		return "", errcat.Classify(dev.Hostname, "connect", err)
 	}

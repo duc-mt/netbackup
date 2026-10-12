@@ -29,18 +29,20 @@ type Device struct {
 	Port            int
 	Vendor          string // key into the vendor.Profiles map
 	CredentialGroup string // optional group key for per-site credentials (default: "default")
+	JumpHost        string // optional jump host name (e.g. "bastion-site-a"); empty = direct or global default
 	Line            int    // source line number, for error messages
 }
 
 // Load reads a CSV file with the header:
 //
-//	hostname,address,port,vendor,credential_group
+//	hostname,address,port,vendor,credential_group,jump_host
 //
 // Rules, chosen to make hand-editing forgiving:
 //   - blank lines and lines starting with '#' are skipped
 //   - the header line is detected and skipped automatically
 //   - port defaults to 22 if empty
 //   - credential_group defaults to "default" if empty
+//   - jump_host is optional; empty means direct connection (or use global default)
 //   - a malformed line is reported and skipped -- it does not abort loading
 //     the rest of the file, matching the tool's "one bad entry never stops
 //     the run" philosophy
@@ -134,6 +136,10 @@ func parseLine(fields []string, lineNo int) (Device, error) {
 
 	if len(fields) >= 5 && fields[4] != "" {
 		dev.CredentialGroup = strings.ToLower(fields[4])
+	}
+
+	if len(fields) >= 6 && fields[5] != "" {
+		dev.JumpHost = strings.ToLower(fields[5])
 	}
 
 	return dev, nil

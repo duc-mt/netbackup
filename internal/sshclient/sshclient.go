@@ -65,6 +65,10 @@ type Options struct {
 	// pinned key, or ssh.InsecureIgnoreHostKey() as an explicit, callsite-
 	// visible opt-out (never as a hidden default).
 	HostKeyCallback ssh.HostKeyCallback
+
+	// JumpHostKeyCallback, when non-nil, is used to verify the bastion /
+	// jump host's own key. Falls back to HostKeyCallback when nil.
+	JumpHostKeyCallback ssh.HostKeyCallback
 }
 
 // ErrNoHostKeyCallback is returned by Connect when opts.HostKeyCallback is
@@ -164,7 +168,80 @@ func Connect(ctx context.Context, address string, port int, username, password s
 		return nil, fmt.Errorf("dial: %w", err)
 	}
 
-	config := &ssh.ClientConfig{
+	config := buildClientConfig(username, password, opts.HostKeyCallback, opts)
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("handshake: %w", err)
+	}
+
+	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+// ConnectJumpHost opens an SSH connection to a bastion / jump host. The
+// returned *ssh.Client can be shared across many concurrent ConnectViaJump
+// calls because (*ssh.Client).Dial is safe for concurrent use.
+// The caller is responsible for calling Close() on the returned client when
+// the run is done.
+func ConnectJumpHost(ctx context.Context, address string, port int, username, password string, opts Options) (*ssh.Client, error) {
+	hkCb := opts.JumpHostKeyCallback
+	if hkCb == nil {
+		hkCb = opts.HostKeyCallback
+	}
+	if hkCb == nil {
+		return nil, ErrNoHostKeyCallback
+	}
+
+	addr := net.JoinHostPort(address, fmt.Sprintf("%d", port))
+	dialer := net.Dialer{Timeout: opts.ConnectTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial jump host: %w", err)
+	}
+
+	config := buildClientConfig(username, password, hkCb, opts)
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("jump host handshake: %w", err)
+	}
+	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+// ConnectViaJump opens a ProxyJump-style connection to targetAddress:targetPort
+// by tunnelling through an already-established jump host client (bastion).
+// The tunnel is a standard SSH "direct-tcpip" channel -- exactly what OpenSSH
+// does with `ssh -J bastion target` and Paramiko does via a proxy channel.
+//
+// jumpClient is safe to share across goroutines; pass the same value for all
+// devices that route through the same bastion.
+func ConnectViaJump(ctx context.Context, jumpClient *ssh.Client, address string, port int, username, password string, opts Options) (*ssh.Client, error) {
+	if opts.HostKeyCallback == nil {
+		return nil, ErrNoHostKeyCallback
+	}
+
+	targetAddr := net.JoinHostPort(address, fmt.Sprintf("%d", port))
+
+	// Open a direct-tcpip channel through the bastion. This is identical to
+	// what `ssh -W` / ProxyJump does under the hood.
+	tunnelConn, err := jumpClient.DialContext(ctx, "tcp", targetAddr)
+	if err != nil {
+		return nil, fmt.Errorf("jump tunnel to %s: %w", targetAddr, err)
+	}
+
+	config := buildClientConfig(username, password, opts.HostKeyCallback, opts)
+	sshConn, chans, reqs, err := ssh.NewClientConn(tunnelConn, targetAddr, config)
+	if err != nil {
+		tunnelConn.Close()
+		return nil, fmt.Errorf("handshake via jump: %w", err)
+	}
+	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+// buildClientConfig is a shared helper so Connect, ConnectJumpHost, and
+// ConnectViaJump all use the exact same auth methods and cipher suite.
+func buildClientConfig(username, password string, hkCb ssh.HostKeyCallback, opts Options) *ssh.ClientConfig {
+	return &ssh.ClientConfig{
 		User: username,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
@@ -176,7 +253,7 @@ func Connect(ctx context.Context, address string, port int, username, password s
 				return answers, nil
 			}),
 		},
-		HostKeyCallback: opts.HostKeyCallback,
+		HostKeyCallback: hkCb,
 		HostKeyAlgorithms: []string{
 			ssh.KeyAlgoED25519,
 			ssh.KeyAlgoECDSA256,
@@ -211,14 +288,6 @@ func Connect(ctx context.Context, address string, port int, username, password s
 			},
 		},
 	}
-
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("handshake: %w", err)
-	}
-
-	return ssh.NewClient(sshConn, chans, reqs), nil
 }
 
 // RunCommand executes a single command on a plain (non-interactive, no PTY)

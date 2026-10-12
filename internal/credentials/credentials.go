@@ -32,7 +32,21 @@ import (
 const (
 	EnvUsername = "NETBACKUP_USERNAME"
 	EnvPassword = "NETBACKUP_PASSWORD"
+
+	// Global jump / bastion host defaults.  Per-named-jump credentials use
+	// NETBACKUP_JUMP_<NAME>_USERNAME / _PASSWORD (same group-key pattern as
+	// device credentials).
+	EnvJumpHost     = "NETBACKUP_JUMP_HOST"     // host[:port], e.g. bastion.example.com:22
+	EnvJumpUsername = "NETBACKUP_JUMP_USERNAME"
+	EnvJumpPassword = "NETBACKUP_JUMP_PASSWORD"
 )
+
+// JumpCredentials holds connection details for a bastion / jump host.
+type JumpCredentials struct {
+	Host     string // host[:port]; empty disables jump
+	Username string
+	Password string
+}
 
 type Credentials struct {
 	Username string
@@ -44,6 +58,7 @@ type Credentials struct {
 type Store struct {
 	fileVals     map[string]string
 	defaultCreds Credentials
+	jumpDefaults JumpCredentials // global jump host defaults (from env / .env)
 }
 
 // NewStore initializes a credential Store from the specified env file and
@@ -61,6 +76,14 @@ func NewStore(envFile string) (*Store, error) {
 		if err == nil {
 			s.fileVals = vals
 		}
+	}
+
+	// Seed global jump host defaults (no interactive prompt -- bastions are
+	// always configured via env/file rather than prompted interactively).
+	s.jumpDefaults = JumpCredentials{
+		Host:     firstNonEmpty(s.fileVals[EnvJumpHost], os.Getenv(EnvJumpHost)),
+		Username: firstNonEmpty(s.fileVals[EnvJumpUsername], os.Getenv(EnvJumpUsername)),
+		Password: firstNonEmpty(s.fileVals[EnvJumpPassword], os.Getenv(EnvJumpPassword)),
 	}
 
 	defaultCreds := Credentials{
@@ -122,6 +145,42 @@ func (s *Store) ForGroup(group string) Credentials {
 	}
 
 	return Credentials{Username: u, Password: p}
+}
+
+// JumpDefaults returns the global bastion / jump host connection details
+// loaded from NETBACKUP_JUMP_HOST / NETBACKUP_JUMP_USERNAME / NETBACKUP_JUMP_PASSWORD
+// (or their .env equivalents). Host will be empty if none were configured.
+func (s *Store) JumpDefaults() JumpCredentials {
+	return s.jumpDefaults
+}
+
+// ForJumpHost resolves credentials for a named jump host (the value from the
+// inventory's jump_host column). It uses the following priority:
+//
+//  1. NETBACKUP_JUMP_<NAME>_USERNAME / NETBACKUP_JUMP_<NAME>_PASSWORD
+//  2. Global NETBACKUP_JUMP_USERNAME / NETBACKUP_JUMP_PASSWORD
+//  3. The device default credentials (username only, as a last resort)
+//
+// name is case-insensitive and sanitised before key lookup.
+func (s *Store) ForJumpHost(name string) JumpCredentials {
+	name = strings.ToUpper(strings.TrimSpace(name))
+
+	cleanName := strings.Map(func(r rune) rune {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		return '_'
+	}, name)
+
+	userKey := fmt.Sprintf("NETBACKUP_JUMP_%s_USERNAME", cleanName)
+	passKey := fmt.Sprintf("NETBACKUP_JUMP_%s_PASSWORD", cleanName)
+	hostKey := fmt.Sprintf("NETBACKUP_JUMP_%s_HOST", cleanName)
+
+	host := firstNonEmpty(s.fileVals[hostKey], os.Getenv(hostKey), s.jumpDefaults.Host)
+	u := firstNonEmpty(s.fileVals[userKey], os.Getenv(userKey), s.jumpDefaults.Username, s.defaultCreds.Username)
+	p := firstNonEmpty(s.fileVals[passKey], os.Getenv(passKey), s.jumpDefaults.Password)
+
+	return JumpCredentials{Host: host, Username: u, Password: p}
 }
 
 // Resolve loads default credentials using the priority described above.

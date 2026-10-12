@@ -318,3 +318,166 @@ func TestKnownHostsCallbackAcceptNew(t *testing.T) {
 		t.Fatalf("expected known key to be accepted: %v", err)
 	}
 }
+
+// startMockSSHServerWithForward starts a mock SSH server that also handles
+// "direct-tcpip" channel requests, forwarding them to the given target addr.
+// This mimics a real bastion host that can proxy connections.
+func startMockSSHServerWithForward(t *testing.T, targetAddr string) (int, func()) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating host key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("creating signer: %v", err)
+	}
+
+	serverConfig := &ssh.ServerConfig{
+		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			if c.User() == "jumpuser" && string(pass) == "jumppass" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("password rejected")
+		},
+	}
+	serverConfig.AddHostKey(signer)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	done := make(chan struct{})
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				select {
+				case <-done:
+				default:
+				}
+				return
+			}
+			go handleBastionConn(conn, serverConfig, targetAddr)
+		}
+	}()
+
+	return port, func() {
+		close(done)
+		_ = listener.Close()
+	}
+}
+
+// handleBastionConn handles SSH connections on the mock bastion, proxying
+// direct-tcpip channel requests to targetAddr.
+func handleBastionConn(conn net.Conn, config *ssh.ServerConfig, targetAddr string) {
+	sConn, chans, reqs, err := ssh.NewServerConn(conn, config)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	defer sConn.Close()
+	go ssh.DiscardRequests(reqs)
+
+	for newChan := range chans {
+		switch newChan.ChannelType() {
+		case "direct-tcpip":
+			// Accept the channel and pipe it to the real target.
+			ch, _, err := newChan.Accept()
+			if err != nil {
+				continue
+			}
+			go func() {
+				defer ch.Close()
+				target, err := net.Dial("tcp", targetAddr)
+				if err != nil {
+					return
+				}
+				defer target.Close()
+				done := make(chan struct{}, 2)
+				copy := func(dst, src interface {
+					Read([]byte) (int, error)
+					Write([]byte) (int, error)
+				}) {
+					buf := make([]byte, 32*1024)
+					for {
+						n, err := src.Read(buf)
+						if n > 0 {
+							if _, werr := dst.Write(buf[:n]); werr != nil {
+								break
+							}
+						}
+						if err != nil {
+							break
+						}
+					}
+					done <- struct{}{}
+				}
+				go copy(target, ch)
+				go copy(ch, target)
+				<-done
+			}()
+		default:
+			newChan.Reject(ssh.UnknownChannelType, "only direct-tcpip is supported on this bastion")
+		}
+	}
+}
+
+func TestConnectViaJump(t *testing.T) {
+	// Start the "real" target SSH server.
+	targetPort, targetCleanup := startMockSSHServer(t)
+	defer targetCleanup()
+
+	targetAddr := fmt.Sprintf("127.0.0.1:%d", targetPort)
+
+	// Start the bastion that can forward to the target.
+	bastionPort, bastionCleanup := startMockSSHServerWithForward(t, targetAddr)
+	defer bastionCleanup()
+
+	opts := Options{
+		ConnectTimeout:  5 * time.Second,
+		CommandTimeout:  5 * time.Second,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	// 1. Connect to bastion.
+	bastionClient, err := ConnectJumpHost(context.Background(), "127.0.0.1", bastionPort, "jumpuser", "jumppass", opts)
+	if err != nil {
+		t.Fatalf("ConnectJumpHost failed: %v", err)
+	}
+	defer bastionClient.Close()
+
+	// 2. Connect to target via the bastion tunnel.
+	client, err := ConnectViaJump(context.Background(), bastionClient, "127.0.0.1", targetPort, "testuser", "testpass", opts)
+	if err != nil {
+		t.Fatalf("ConnectViaJump failed: %v", err)
+	}
+	defer client.Close()
+
+	// 3. Run a command through the tunnelled connection.
+	out, err := RunCommand(client, "show run", opts)
+	if err != nil {
+		t.Fatalf("RunCommand via jump failed: %v", err)
+	}
+	if !strings.Contains(out, "core-switch-01") {
+		t.Errorf("unexpected output through jump: %q", out)
+	}
+}
+
+func TestConnectJumpHostBadPassword(t *testing.T) {
+	bastionPort, cleanup := startMockSSHServerWithForward(t, "127.0.0.1:22")
+	defer cleanup()
+
+	opts := Options{
+		ConnectTimeout:  2 * time.Second,
+		CommandTimeout:  2 * time.Second,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	_, err := ConnectJumpHost(context.Background(), "127.0.0.1", bastionPort, "jumpuser", "wrongpass", opts)
+	if err == nil {
+		t.Fatal("expected auth failure for bad jump host password")
+	}
+}

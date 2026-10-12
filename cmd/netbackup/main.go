@@ -59,6 +59,12 @@ type cliOptions struct {
 	knownHostsPolicy      string
 	insecureIgnoreHostKey bool
 	resultTable           bool
+
+	// Jump host / bastion support
+	jumpEnabled  bool   // master on/off switch
+	jumpHost     string // host[:port] -- global default bastion
+	jumpUser     string // bastion SSH username (overrides NETBACKUP_JUMP_USERNAME)
+	jumpPassword string // bastion SSH password (overrides NETBACKUP_JUMP_PASSWORD)
 }
 
 func parseFlags() cliOptions {
@@ -79,6 +85,13 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for unknown host keys: 'strict' or 'accept-new'")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
 	flag.BoolVar(&opts.resultTable, "result-table", true, "print a colorized per-device result table to stdout after the run")
+
+	// Jump host / bastion
+	flag.BoolVar(&opts.jumpEnabled, "jump", true, "enable jump host / bastion routing (set false to connect all devices directly, overriding inventory and env config)")
+	flag.StringVar(&opts.jumpHost, "jump-host", "", "global default bastion host[:port] for devices not reachable directly (e.g. mgmt-gw.example.com:22)")
+	flag.StringVar(&opts.jumpUser, "jump-user", "", "SSH username for the global jump host (overrides NETBACKUP_JUMP_USERNAME)")
+	flag.StringVar(&opts.jumpPassword, "jump-password", "", "SSH password for the global jump host (overrides NETBACKUP_JUMP_PASSWORD)")
+
 	flag.Parse()
 	return opts
 }
@@ -109,10 +122,28 @@ func run() int {
 	}
 	logger.Info("loaded %d device(s) from %s", len(devices), opts.inventoryPath)
 
+	// Inject jump CLI flags into the environment before NewStore reads them,
+	// so credential resolution stays in one place (the credentials package).
+	if opts.jumpUser != "" {
+		os.Setenv(credentials.EnvJumpUsername, opts.jumpUser)
+	}
+	if opts.jumpPassword != "" {
+		os.Setenv(credentials.EnvJumpPassword, opts.jumpPassword)
+	}
+	if opts.jumpHost != "" {
+		os.Setenv(credentials.EnvJumpHost, opts.jumpHost)
+	}
+
 	credStore, err := credentials.NewStore(opts.envFile)
 	if err != nil {
 		logger.Error("resolving credentials: %v", err)
 		return 1
+	}
+
+	if opts.jumpHost != "" && opts.jumpEnabled {
+		logger.Info("global jump host configured: %s (per-device overrides via inventory jump_host column; disable with -jump=false)", opts.jumpHost)
+	} else if !opts.jumpEnabled {
+		logger.Info("jump host routing disabled via -jump=false -- all devices will be connected directly")
 	}
 
 	var hostKeyCallback ssh.HostKeyCallback
@@ -129,13 +160,15 @@ func run() int {
 	}
 
 	cfg := backup.Config{
-		CredStore:      credStore,
-		OutputDir:      opts.outputDir,
-		Concurrency:    opts.concurrency,
-		Redact:         opts.redactSecrets,
-		RetentionCount: opts.retentionCount,
-		RetentionDays:  opts.retentionDays,
-		SaveUnchanged:  opts.saveUnchanged,
+		CredStore:       credStore,
+		OutputDir:       opts.outputDir,
+		Concurrency:     opts.concurrency,
+		Redact:          opts.redactSecrets,
+		RetentionCount:  opts.retentionCount,
+		RetentionDays:   opts.retentionDays,
+		SaveUnchanged:   opts.saveUnchanged,
+		JumpEnabled:     opts.jumpEnabled,
+		JumpDefaultHost: opts.jumpHost,
 		SSH: sshclient.Options{
 			ConnectTimeout:  opts.connectTimeout,
 			CommandTimeout:  opts.commandTimeout,
