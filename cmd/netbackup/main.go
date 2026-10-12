@@ -31,6 +31,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"netbackup/internal/backup"
+	"netbackup/internal/compliance"
 	"netbackup/internal/credentials"
 	"netbackup/internal/inventory"
 	"netbackup/internal/logging"
@@ -61,6 +62,14 @@ type cliOptions struct {
 	resultTable           bool
 	showDiff              bool
 
+	// Semantic diff, compliance and reports
+	ignoreVolatile   bool   // drop volatile lines (timestamps, clock stamps) before diffing
+	volatilePatterns string // optional file of extra volatile-line regexes
+	goldenDir        string // directory of <vendor>.golden baselines
+	complianceRules  string // single rules file with [vendor] sections
+	htmlReport       string // path of the HTML run report ("" = none)
+	mdReport         string // path of the Markdown changelog ("" = none)
+
 	// Jump host / bastion support
 	jumpEnabled  bool   // master on/off switch
 	jumpHost     string // host[:port] -- global default bastion
@@ -88,6 +97,12 @@ func parseFlags() cliOptions {
 	flag.BoolVar(&opts.resultTable, "result-table", true, "print a colorized per-device result table to stdout after the run")
 	flag.BoolVar(&opts.showDiff, "diff", true, "display colorized diff against previous backup when configuration changes")
 	flag.BoolVar(&opts.showDiff, "show-diff", true, "alias for -diff")
+	flag.BoolVar(&opts.ignoreVolatile, "ignore-volatile", true, "ignore volatile lines (\"! Last configuration change at\", \"## Last commit\", ntp clock-period, ...) when detecting changes; saved files are never modified")
+	flag.StringVar(&opts.volatilePatterns, "volatile-patterns", "", "optional file with extra volatile-line regular expressions, one per line (# starts a comment)")
+	flag.StringVar(&opts.goldenDir, "golden-dir", "", "directory of <vendor>.golden baseline files (plus optional common.golden); enables golden-config compliance checks")
+	flag.StringVar(&opts.complianceRules, "compliance-rules", "", "single compliance rules file with optional [vendor] sections; can be combined with -golden-dir")
+	flag.StringVar(&opts.htmlReport, "html-report", "", "write a standalone HTML run report to this path ({run}, {timestamp} and {date} are expanded)")
+	flag.StringVar(&opts.mdReport, "md-report", "", "write/update a Markdown changelog at this path, newest run first ({run}, {timestamp} and {date} are expanded)")
 
 	// Jump host / bastion
 	flag.BoolVar(&opts.jumpEnabled, "jump", true, "enable jump host / bastion routing (set false to connect all devices directly, overriding inventory and env config)")
@@ -165,6 +180,8 @@ func run() int {
 	cfg := backup.Config{
 		CredStore:       credStore,
 		OutputDir:       opts.outputDir,
+		RunName:         backup.DefaultRunName(time.Now()),
+		IgnoreVolatile:  opts.ignoreVolatile,
 		Concurrency:     opts.concurrency,
 		Redact:          opts.redactSecrets,
 		RetentionCount:  opts.retentionCount,
@@ -179,6 +196,9 @@ func run() int {
 			HostKeyCallback: hostKeyCallback,
 		},
 	}
+
+	configureSemanticDiff(logger, &cfg, opts)
+	configureCompliance(logger, &cfg, opts)
 
 	if opts.showDiff {
 		cfg.OnDiff = func(dev inventory.Device, lines []string, added, removed int) {
@@ -197,12 +217,103 @@ func run() int {
 	// text, machine-greppable). This table is a separate, human-facing
 	// view on stdout; it never aborts the run even if rendering itself
 	// goes wrong, so it's safe to always attempt.
+	rows := report.FromResults(results)
 	if opts.resultTable {
-		report.PrintSummaryTable(report.FromResults(results))
+		report.PrintSummaryTable(rows)
 	}
+
+	// Shareable reports. Like the table, they never abort the run: any
+	// failure is logged as a warning and the exit code is unaffected.
+	writeReports(logger, opts, cfg.RunName, rows)
 
 	if failures > 0 {
 		return 2 // distinct from the "fatal config error" exit code 1
 	}
 	return 0
+}
+
+// configureSemanticDiff wires the volatile-line filter into the backup
+// config. A bad pattern or an unreadable patterns file only costs the
+// extra patterns; the built-in rules always stay active.
+func configureSemanticDiff(logger *logging.Logger, cfg *backup.Config, opts cliOptions) {
+	if !opts.ignoreVolatile {
+		logger.Info("semantic diff disabled (-ignore-volatile=false): volatile lines such as timestamps count as changes")
+		return
+	}
+
+	var extra []string
+	if opts.volatilePatterns != "" {
+		patterns, err := backup.LoadVolatilePatterns(opts.volatilePatterns)
+		if err != nil {
+			logger.Warn("volatile patterns: %v -- continuing with the built-in rules only", err)
+		} else {
+			extra = patterns
+		}
+	}
+
+	filter, errs := backup.NewVolatileFilter(extra)
+	for _, err := range errs {
+		logger.Warn("%v -- pattern ignored", err)
+	}
+	cfg.VolatileFilter = filter
+	logger.Info("semantic diff: ignoring volatile lines (%d rule(s) active)", filter.Len())
+}
+
+// configureCompliance loads the golden baselines when requested. Problems
+// are warnings, never fatal: an unreadable baseline must not stop the
+// nightly backups, it only turns compliance checking off.
+func configureCompliance(logger *logging.Logger, cfg *backup.Config, opts cliOptions) {
+	if opts.goldenDir == "" && opts.complianceRules == "" {
+		return
+	}
+
+	baseline, errs := compliance.Load(opts.goldenDir, opts.complianceRules)
+	for _, err := range errs {
+		logger.Warn("compliance: %v", err)
+	}
+	if baseline == nil {
+		logger.Warn("compliance checking disabled: no usable baseline rules were loaded")
+		return
+	}
+	cfg.Baseline = baseline
+	logger.Info("compliance: checking devices against %d golden baseline rule(s)", baseline.Len())
+}
+
+// writeReports produces the optional HTML and Markdown reports.
+func writeReports(logger *logging.Logger, opts cliOptions, runName string, rows []report.BackupResult) {
+	info := report.RunInfo{RunName: runName, GeneratedAt: time.Now()}
+
+	if opts.htmlReport != "" {
+		path := report.ExpandPath(opts.htmlReport, info)
+		emitReport(logger, "HTML", path, func() ([]string, error) {
+			return report.WriteHTML(path, info, rows)
+		})
+	}
+	if opts.mdReport != "" {
+		path := report.ExpandPath(opts.mdReport, info)
+		emitReport(logger, "Markdown", path, func() ([]string, error) {
+			return report.WriteMarkdown(path, info, rows)
+		})
+	}
+}
+
+// emitReport runs one report writer, logging its warnings and outcome. A
+// panic inside the writer is recovered and logged so a reporting bug can
+// never turn a finished backup run into a crash.
+func emitReport(logger *logging.Logger, kind, path string, write func() ([]string, error)) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("%s report generation failed: %v", kind, r)
+		}
+	}()
+
+	warnings, err := write()
+	for _, w := range warnings {
+		logger.Warn("%s", w)
+	}
+	if err != nil {
+		logger.Warn("%s report not written to %s: %v", kind, path, err)
+		return
+	}
+	logger.Info("%s report written to %s", kind, path)
 }

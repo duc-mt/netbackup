@@ -43,6 +43,29 @@ type BackupResult struct {
 	Duration   float64 // elapsed time in seconds
 	Diff       string  // configuration change diff count e.g. "+3/-1", or "-"
 	Error      error   // nil on success
+
+	// Risk is the highest risk level detected in the diff: "", "INFO",
+	// "WARNING" or "CRITICAL".
+	Risk string
+
+	// RiskBadge is the short tag shown next to the diff counts, e.g.
+	// "CRITICAL: ACL" or "ROUTING"; empty when no risk was detected.
+	RiskBadge string
+
+	// RiskDetails lists the notable (WARNING / CRITICAL) findings as
+	// display lines, for the HTML and Markdown reports.
+	RiskDetails []string
+
+	// DiffLines holds the raw "+"/"-" diff lines of a changed device.
+	DiffLines []string
+
+	// ComplianceChecked is true when a golden baseline applied to the
+	// device; Drifts then lists the deviations (empty means compliant).
+	ComplianceChecked bool
+	Drifts            []string
+
+	// Warnings lists non-fatal analysis problems recorded for the device.
+	Warnings []string
 }
 
 // Well-known status labels. Callers aren't required to use these exact
@@ -64,13 +87,29 @@ const (
 	ansiGreen  = "\033[32m"
 	ansiRed    = "\033[31m"
 	ansiYellow = "\033[33m"
+
+	ansiBoldRed = "\033[1;31m" // CRITICAL risk
 )
 
-// defaultTableColumns are the headers when no diffs are present.
-var defaultTableColumns = []string{"HOSTNAME/IP", "PLATFORM", "STATUS", "FILE SIZE", "DURATION", "ERROR"}
+// rowOptions selects the optional table columns.
+type rowOptions struct {
+	diff       bool // DIFF column: at least one device recorded a diff
+	compliance bool // COMPLIANCE column: at least one device was checked against a golden baseline
+}
 
-// diffTableColumns are the headers when at least one device recorded a diff.
-var diffTableColumns = []string{"HOSTNAME/IP", "PLATFORM", "STATUS", "FILE SIZE", "DURATION", "DIFF", "ERROR"}
+// tableColumns returns the headers for the selected optional columns. The
+// first five columns and the trailing ERROR column are always present, so
+// the cell indexes of HOSTNAME/IP .. DURATION never move.
+func tableColumns(o rowOptions) []string {
+	cols := []string{"HOSTNAME/IP", "PLATFORM", "STATUS", "FILE SIZE", "DURATION"}
+	if o.diff {
+		cols = append(cols, "DIFF")
+	}
+	if o.compliance {
+		cols = append(cols, "COMPLIANCE")
+	}
+	return append(cols, "ERROR")
+}
 
 // maxErrorColumnWidth caps how wide the ERROR column can grow, so one
 // long SSH error message can't blow out the whole table's layout.
@@ -153,6 +192,7 @@ func colorForStatus(status string) string {
 type tableRow struct {
 	cells       []string
 	statusColor string
+	cellColors  map[int]string // optional color per cell index (DIFF risk, COMPLIANCE)
 }
 
 func statusWithIcon(status string) string {
@@ -169,17 +209,23 @@ func statusWithIcon(status string) string {
 	}
 }
 
-// buildRow formats one BackupResult into display cells. It never panics:
-// a formatting failure is recorded as a warning and the cell falls back
-// to "N/A", so one malformed result can't stop the rest of the table
-// from rendering.
+// buildRow formats one BackupResult into display cells. showDiff[0]
+// switches the DIFF column on. See buildRowOpts for the full option set.
 func buildRow(r BackupResult, showDiff ...bool) (tableRow, []string) {
-	withDiff := false
+	var o rowOptions
 	if len(showDiff) > 0 {
-		withDiff = showDiff[0]
+		o.diff = showDiff[0]
 	}
+	return buildRowOpts(r, o)
+}
+
+// buildRowOpts formats one BackupResult into display cells. It never
+// panics: a formatting failure is recorded as a warning and the cell falls
+// back to "N/A", so one malformed result can't stop the rest of the table
+// from rendering.
+func buildRowOpts(r BackupResult, o rowOptions) (tableRow, []string) {
 	var warnings []string
-	row := tableRow{statusColor: colorForStatus(r.Status)}
+	row := tableRow{statusColor: colorForStatus(r.Status), cellColors: make(map[int]string)}
 
 	hostCell := orDash(r.HostnameIP)
 	platformCell := orDash(r.Platform)
@@ -197,16 +243,79 @@ func buildRow(r BackupResult, showDiff ...bool) (tableRow, []string) {
 		dur = "N/A"
 	}
 
-	errCell := formatError(r.Error)
+	cells := []string{hostCell, platformCell, statusCell, size, dur}
 
-	if withDiff {
+	if o.diff {
 		diffCell := orDash(r.Diff)
-		row.cells = []string{hostCell, platformCell, statusCell, size, dur, diffCell, errCell}
-	} else {
-		row.cells = []string{hostCell, platformCell, statusCell, size, dur, errCell}
+		if r.RiskBadge != "" {
+			if diffCell == "-" {
+				diffCell = "[" + r.RiskBadge + "]"
+			} else {
+				diffCell += " [" + r.RiskBadge + "]"
+			}
+			if c := colorForRisk(r.Risk); c != "" {
+				row.cellColors[len(cells)] = c
+			}
+		}
+		cells = append(cells, diffCell)
 	}
 
+	if o.compliance {
+		cells = append(cells, complianceCell(r))
+		if r.ComplianceChecked {
+			if len(r.Drifts) == 0 {
+				row.cellColors[len(cells)-1] = ansiGreen
+			} else {
+				row.cellColors[len(cells)-1] = ansiRed
+			}
+		}
+	}
+
+	cells = append(cells, formatError(r.Error))
+	row.cells = cells
+
 	return row, warnings
+}
+
+// colorForRisk maps a risk level to the color of its DIFF-column badge.
+// INFO and unknown levels stay uncolored.
+func colorForRisk(risk string) string {
+	switch strings.ToUpper(risk) {
+	case "CRITICAL":
+		return ansiBoldRed
+	case "WARNING":
+		return ansiYellow
+	default:
+		return ""
+	}
+}
+
+// complianceLabel renders "COMPLIANT", "1 DRIFT" or "N DRIFTS"; empty when
+// the device was not checked against a baseline.
+func complianceLabel(r BackupResult) string {
+	switch {
+	case !r.ComplianceChecked:
+		return ""
+	case len(r.Drifts) == 0:
+		return "COMPLIANT"
+	case len(r.Drifts) == 1:
+		return "1 DRIFT"
+	default:
+		return fmt.Sprintf("%d DRIFTS", len(r.Drifts))
+	}
+}
+
+// complianceCell renders the COMPLIANCE table cell.
+func complianceCell(r BackupResult) string {
+	label := complianceLabel(r)
+	switch {
+	case label == "":
+		return "-"
+	case r.ComplianceChecked && len(r.Drifts) == 0:
+		return "✔ " + label
+	default:
+		return "✖ " + label
+	}
 }
 
 func orDash(s string) string {
@@ -240,22 +349,21 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 		}
 	}()
 
-	showDiff := false
+	var opts rowOptions
 	for _, r := range results {
 		if r.Diff != "" && r.Diff != "-" {
-			showDiff = true
-			break
+			opts.diff = true
+		}
+		if r.ComplianceChecked {
+			opts.compliance = true
 		}
 	}
 
-	cols := defaultTableColumns
-	if showDiff {
-		cols = diffTableColumns
-	}
+	cols := tableColumns(opts)
 
 	rows := make([]tableRow, 0, len(results))
 	for _, r := range results {
-		row, warnings := buildRow(r, showDiff)
+		row, warnings := buildRowOpts(r, opts)
 		rows = append(rows, row)
 		for _, w := range warnings {
 			fmt.Fprintf(warn, "report: %s\n", w)
@@ -298,7 +406,71 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 			green(fmt.Sprintf("✔ Succeeded: %d", succeeded)),
 			red(fmt.Sprintf("✖ Failed: %d", failed)),
 			len(results))
+
+		if line, color := riskSummaryLine(results); line != "" {
+			fmt.Fprintf(out, "  %s\n", paint(colorize, color, line))
+		}
+		if opts.compliance {
+			checked, compliant := complianceCounts(results)
+			rate := 100 * float64(compliant) / float64(checked)
+			color := ansiGreen
+			if compliant < checked {
+				color = ansiRed
+			}
+			line := fmt.Sprintf("Compliance: %d/%d compliant (%.0f%%)", compliant, checked, rate)
+			fmt.Fprintf(out, "  %s\n", paint(colorize, color, line))
+		}
 	}
+}
+
+// paint wraps s in an ANSI color when colorize is set and color is non-empty.
+func paint(colorize bool, color, s string) string {
+	if !colorize || color == "" {
+		return s
+	}
+	return color + s + ansiReset
+}
+
+// complianceCounts returns how many results were checked against a golden
+// baseline and how many of those had no drift.
+func complianceCounts(results []BackupResult) (checked, compliant int) {
+	for _, r := range results {
+		if !r.ComplianceChecked {
+			continue
+		}
+		checked++
+		if len(r.Drifts) == 0 {
+			compliant++
+		}
+	}
+	return checked, compliant
+}
+
+// riskSummaryLine counts devices by highest risk level. It returns an empty
+// line when no device carries a risk; the color is red when any device is
+// CRITICAL, yellow otherwise.
+func riskSummaryLine(results []BackupResult) (line, color string) {
+	var critical, warning, info int
+	for _, r := range results {
+		switch strings.ToUpper(r.Risk) {
+		case "CRITICAL":
+			critical++
+		case "WARNING":
+			warning++
+		case "INFO":
+			info++
+		}
+	}
+	if critical+warning+info == 0 {
+		return "", ""
+	}
+	switch {
+	case critical > 0:
+		color = ansiBoldRed
+	case warning > 0:
+		color = ansiYellow
+	}
+	return fmt.Sprintf("⚠ Risk: %d critical │ %d warning │ %d info", critical, warning, info), color
 }
 
 func columnWidths(cols []string, rows []tableRow) []int {
@@ -347,8 +519,12 @@ func writeRow(w io.Writer, cols []string, widths []int, row tableRow, colorize b
 		h := cols[i]
 		alignRight := (h == "FILE SIZE" || h == "DURATION" || h == "DIFF")
 		text := padCell(cell, widths[i], alignRight)
-		if colorize && i == 2 && row.statusColor != "" {
-			text = row.statusColor + text + ansiReset
+		if colorize {
+			if i == 2 && row.statusColor != "" {
+				text = row.statusColor + text + ansiReset
+			} else if c := row.cellColors[i]; c != "" {
+				text = c + text + ansiReset
+			}
 		}
 		fmt.Fprintf(w, " %s │", text)
 	}

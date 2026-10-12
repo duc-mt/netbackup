@@ -28,6 +28,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"netbackup/internal/compliance"
 	"netbackup/internal/credentials"
 	"netbackup/internal/errcat"
 	"netbackup/internal/inventory"
@@ -65,6 +66,20 @@ type Config struct {
 
 	// OnDiff callback is invoked when a diff is detected against the latest backup
 	OnDiff func(dev inventory.Device, lines []string, added, removed int)
+
+	// IgnoreVolatile makes change detection compare the "before" and "after"
+	// configurations with volatile lines (clock stamps, "last changed"
+	// comments, size counters, uptime banners) removed, so noise alone is
+	// not reported as a change. The file written to disk is never filtered.
+	IgnoreVolatile bool
+
+	// VolatileFilter supplies the volatile-line rules used when
+	// IgnoreVolatile is set. Nil means the built-in rules.
+	VolatileFilter *VolatileFilter
+
+	// Baseline holds the golden-config rules every device is checked
+	// against. Nil disables compliance checking.
+	Baseline *compliance.Baseline
 }
 
 // jumpPool maintains a lazily-initialised, shared *ssh.Client per unique
@@ -152,6 +167,32 @@ type Result struct {
 	OutputPath  string
 	DiffPath    string
 	Duration    time.Duration
+
+	// VolatileOnly is set when the raw output differs from the previous
+	// backup but only in volatile (or whitespace-only) lines, so the device
+	// counts as Unchanged. Only possible with Config.IgnoreVolatile.
+	VolatileOnly bool
+
+	// Risk is the classification of DiffLines; Risk.Level is the highest
+	// risk detected (RiskNone when nothing noteworthy changed).
+	Risk RiskAssessment
+
+	// Compliance is the golden-config check of the fetched configuration.
+	// Compliance.Checked is false when no baseline applies.
+	Compliance compliance.Report
+
+	// Warnings lists non-fatal problems met while processing this device
+	// (a filter, classifier or compliance failure, a diff skipped as too
+	// large). They degrade the extra analysis only; the backup itself
+	// still succeeds.
+	Warnings []string
+}
+
+// DefaultRunName is the run directory name RunAll uses when Config.RunName
+// is empty. Callers that need to know the name before the run starts (for
+// example to put it in a report path) can set Config.RunName from it.
+func DefaultRunName(t time.Time) string {
+	return "backup-" + t.Format("2006-01-02-1504")
 }
 
 // RunAll backs up every device in the inventory using a bounded pool of
@@ -163,7 +204,7 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 		cfg.Concurrency = 1
 	}
 	if cfg.RunName == "" {
-		cfg.RunName = "backup-" + time.Now().Format("2006-01-02-1504")
+		cfg.RunName = DefaultRunName(time.Now())
 	}
 
 	pool := newJumpPool(cfg.SSH)
@@ -224,8 +265,28 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 		return result
 	}
 
+	return processConfig(dev, profile, output, cfg, result)
+}
+
+// processConfig does everything that happens locally once a device's
+// configuration has been fetched: redaction, golden-config compliance,
+// change detection (volatile-aware), risk classification, saving and
+// retention. It is separate from runOne so it can be exercised without an
+// SSH connection.
+//
+// The analysis steps (volatile filtering, diffing, risk classification,
+// compliance) are best effort: if one fails it is recorded in
+// Result.Warnings and the backup carries on, because a problem in an extra
+// feature must never cost the operator the backup itself.
+func processConfig(dev inventory.Device, profile vendor.Profile, output string, cfg Config, result Result) Result {
 	if cfg.Redact {
 		output = redact.Config(output)
+	}
+
+	report, warn := checkCompliance(cfg.Baseline, profile.Key, output)
+	result.Compliance = report
+	if warn != "" {
+		result.Warnings = append(result.Warnings, warn)
 	}
 
 	// Change Detection against latest backup
@@ -242,13 +303,38 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 
 	if found && latestHash != currHash {
 		beforeData, err := os.ReadFile(latestPath)
-		if err == nil {
-			dLines, added, removed, ok := diffConfig(string(beforeData), output)
-			if ok && len(dLines) > 0 {
+		if err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("change detection skipped: reading previous backup %s: %v", latestPath, err))
+		} else {
+			dLines, added, removed, ok, warn := compareConfigs(cfg, profile.Key, string(beforeData), output)
+			if warn != "" {
+				result.Warnings = append(result.Warnings, warn)
+			}
+			switch {
+			case !ok:
+				// No diff available: treat as changed and save the new file.
+			case len(dLines) == 0 && cfg.IgnoreVolatile:
+				// The raw text differs but nothing meaningful does.
+				result.Unchanged = true
+				result.VolatileOnly = true
+				if !cfg.SaveUnchanged {
+					result.Success = true
+					result.OutputPath = latestPath
+					return result
+				}
+			case len(dLines) > 0:
 				result.DiffLines = dLines
 				result.DiffAdded = added
 				result.DiffRemoved = removed
 				result.HasDiff = true
+
+				risk, warn := assessRiskSafe(dLines)
+				result.Risk = risk
+				if warn != "" {
+					result.Warnings = append(result.Warnings, warn)
+				}
+
 				if cfg.OnDiff != nil {
 					cfg.OnDiff(dev, dLines, added, removed)
 				}
@@ -256,6 +342,8 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 		}
 	}
 
+	// The saved file is always the real configuration (redacted if
+	// requested) -- never the volatile-filtered comparison text.
 	path, err := save(dev, profile, output, cfg)
 	if err != nil {
 		cerr := errcat.New(errcat.CategoryIOError, dev.Hostname, "write", err)
@@ -278,6 +366,61 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 	result.Success = true
 	result.OutputPath = path
 	return result
+}
+
+// compareConfigs diffs the previous and the new configuration. With
+// cfg.IgnoreVolatile both sides first pass through the volatile filter, so
+// lines such as "! Last configuration change at ..." cannot produce a
+// diff. ok is false (with a warning) when no diff could be produced, either
+// because the input is too large or because something panicked.
+func compareConfigs(cfg Config, vendorKey, before, after string) (lines []string, added, removed int, ok bool, warn string) {
+	defer func() {
+		if r := recover(); r != nil {
+			lines, added, removed, ok = nil, 0, 0, false
+			warn = fmt.Sprintf("change detection failed: %v", r)
+		}
+	}()
+
+	if cfg.IgnoreVolatile {
+		f := cfg.VolatileFilter
+		if f == nil {
+			f = sharedDefaultFilter()
+		}
+		before = f.Apply(vendorKey, before)
+		after = f.Apply(vendorKey, after)
+	}
+
+	lines, added, removed, ok = diffConfig(before, after)
+	if !ok {
+		warn = "change detection skipped: configuration too large to diff"
+	}
+	return lines, added, removed, ok, warn
+}
+
+// assessRiskSafe classifies a diff, converting a panic into a warning.
+func assessRiskSafe(lines []string) (a RiskAssessment, warn string) {
+	defer func() {
+		if r := recover(); r != nil {
+			a = RiskAssessment{}
+			warn = fmt.Sprintf("risk classification failed: %v", r)
+		}
+	}()
+	return AssessRisk(lines), ""
+}
+
+// checkCompliance runs the golden-config check, converting a panic into a
+// warning. A nil baseline yields an unchecked (zero) report.
+func checkCompliance(b *compliance.Baseline, vendorKey, config string) (rep compliance.Report, warn string) {
+	if b == nil {
+		return compliance.Report{}, ""
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			rep = compliance.Report{}
+			warn = fmt.Sprintf("compliance check failed: %v", r)
+		}
+	}()
+	return b.Check(vendorKey, config), ""
 }
 
 // resolveJumpAddr returns the effective bastion address for a device, using

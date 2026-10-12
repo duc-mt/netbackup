@@ -32,7 +32,7 @@ func fromResult(r backup.Result) BackupResult {
 	if r.HasDiff || r.DiffAdded > 0 || r.DiffRemoved > 0 {
 		diff = fmt.Sprintf("+%d/-%d", r.DiffAdded, r.DiffRemoved)
 	}
-	return BackupResult{
+	out := BackupResult{
 		HostnameIP: hostnameIP(r),
 		Platform:   orDash(r.Device.Vendor),
 		Status:     statusFor(r),
@@ -40,7 +40,32 @@ func fromResult(r backup.Result) BackupResult {
 		Duration:   r.Duration.Seconds(),
 		Diff:       diff,
 		Error:      r.Err,
+
+		RiskBadge:         r.Risk.Badge(),
+		RiskDetails:       riskDetails(r.Risk),
+		DiffLines:         r.DiffLines,
+		ComplianceChecked: r.Compliance.Checked,
+		Drifts:            r.Compliance.DriftMessages(),
+		Warnings:          r.Warnings,
 	}
+	if r.Risk.Level != backup.RiskNone {
+		out.Risk = r.Risk.Level.String()
+	}
+	return out
+}
+
+// riskDetails renders the notable (WARNING and CRITICAL) findings of an
+// assessment as display lines such as "CRITICAL ACL: +access-list 10 ...".
+// INFO findings are omitted: they are cosmetic and would only add noise.
+func riskDetails(a backup.RiskAssessment) []string {
+	var out []string
+	for _, f := range a.Findings {
+		if f.Level != backup.RiskCritical && f.Level != backup.RiskWarning {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s %s: %s", f.Level, f.Category, f.Line))
+	}
+	return out
 }
 
 func hostnameIP(r backup.Result) string {

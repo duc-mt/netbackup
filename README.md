@@ -62,6 +62,14 @@ or need a platform not listed above.
    credentials from environment variables with graceful fallback to defaults.
 6. **Thread-Safe & Fault-Isolated**: Bounded worker pool concurrency with
    per-goroutine panic recovery.
+7. **Smart / Semantic Diff**: Ignores volatile lines (clock stamps, "last
+   changed" comments, uptime banners) so noise alone never counts as a change.
+8. **Risk Classification & Security Alerts**: Tags every change CRITICAL,
+   WARNING or INFO (AAA, ACLs, SNMP, SSH, routing, VLANs, ...).
+9. **Golden-Config Drift Detection**: Checks each device against per-vendor
+   baselines and reports missing, mismatched or forbidden lines.
+10. **HTML & Markdown Reports**: Self-contained run report and a running
+    changelog with collapsible, colored diffs.
 
 ## Project layout
 
@@ -79,13 +87,19 @@ netbackup/
 │   ├── vendor/vendor.go               # per-platform backup command map
 │   ├── sshclient/sshclient.go         # thread-safe SSH connect + run, hard timeouts
 │   ├── backup/backup.go               # worker pool, change detection, and retention pruning
+│   ├── backup/filter.go               # volatile-line filter (semantic diff)
+│   ├── backup/risk.go                 # CRITICAL / WARNING / INFO change classifier
+│   ├── compliance/compliance.go       # golden-config baselines and drift detection
+│   ├── report/                        # result table, HTML report, Markdown changelog
 │   ├── errcat/errcat.go               # error categorization
 │   └── logging/logging.go             # console + file logging, run summary
 ├── vendor/                            # vendored dependencies (x/crypto, x/term, x/sys)
 ├── bin/                               # pre-built, ready-to-run binaries
 └── examples/
     ├── inventory.csv                  # sample inventory
-    └── env.example                    # sample credentials
+    ├── env.example                    # sample credentials
+    ├── golden/                        # sample golden baselines (<vendor>.golden)
+    └── volatile-patterns.txt          # sample extra volatile-line patterns
 ```
 
 ## Build from source (fully offline — no internet at any step)
@@ -146,6 +160,12 @@ chmod 600 .env
 | `-retention-count`| `0` | Max backups to keep per device (`0` = disabled) |
 | `-retention-days` | `0` | Delete backups older than N days (`0` = disabled) |
 | `-result-table`   | `true`  | Display colorized summary table on terminal (`NO_COLOR` to disable) |
+| `-ignore-volatile`| `true`  | Ignore volatile lines (timestamps, clock stamps, ...) when detecting changes |
+| `-volatile-patterns` | `""` | File of extra volatile-line regexes, one per line (`#` = comment) |
+| `-golden-dir`     | `""`    | Directory of `<vendor>.golden` baselines (+ optional `common.golden`); enables compliance checks |
+| `-compliance-rules` | `""`  | Single rules file with optional `[vendor]` sections; can be combined with `-golden-dir` |
+| `-html-report`    | `""`    | Write a standalone HTML run report to this path |
+| `-md-report`      | `""`    | Write/update a Markdown changelog at this path (newest run first) |
 | `-jump`           | `true`  | Enable bastion/jump host routing (`-jump=false` connects directly) |
 | `-jump-host`      | `""`    | Global default bastion `host[:port]` |
 | `-jump-user`      | `""`    | SSH username for global bastion (overrides `NETBACKUP_JUMP_USERNAME`) |
@@ -172,6 +192,114 @@ When `-result-table=true` (or when running via `./run.sh` / `run.bat`), netbacku
 Exit codes: `0` = every device succeeded, `1` = fatal startup error
 (bad inventory path, invalid credentials), `2` = ran to completion but one
 or more devices failed (check logs for details).
+
+### Smart (semantic) diff
+
+Network OSes stamp their output with values that change on every poll, which
+would otherwise make every device look "changed". With
+`-ignore-volatile=true` (the default) such lines are dropped from **both**
+sides before the previous and the new configuration are compared:
+
+| Platform | Ignored lines |
+|---|---|
+| Cisco IOS / Arista / Huawei / Aruba / Ruijie | `! Last configuration change at ...`, `! NVRAM config last updated at ...`, `! No configuration change since last restart`, `! Time: ...`, `Current configuration : N bytes`, `Building configuration...`, `ntp clock-period N`, Huawei `!Last configuration was updated/saved at ...` |
+| Junos | `## Last changed: ...`, `## Last commit: ...` |
+| VyOS | `// Warning: Do not remove ...`, `// vyos-config-version ...`, `// Release version ...` (and the `/* */` forms) |
+| VyOS / pfSense / Gaia | `# Generated/Exported/Date/Timestamp/Uptime ...` comment banners |
+
+* A device whose only differences are volatile lines is reported as
+  `UNCHANGED` (and logged as `UNCHANGED (volatile lines only)`); no new file
+  is written unless `-save-unchanged` is set.
+* The file saved to disk is always the original configuration. The filter is
+  used only for the comparison, and the `.diff` file shows the filtered diff.
+* Add site-specific noise with `-volatile-patterns <file>` (see
+  `examples/volatile-patterns.txt`). A bad pattern is reported and skipped.
+* `-ignore-volatile=false` restores the previous behaviour.
+
+### Risk classification
+
+Every added (`+`) or removed (`-`) diff line is classified; the highest level
+found is attached to the device result:
+
+| Level | Badge | Triggers |
+|---|---|---|
+| **CRITICAL** | `[CRITICAL: AAA]`, `[CRITICAL: ACL]`, ... | AAA / TACACS / RADIUS, local users and credentials, SNMP communities, ACLs, firewall rules, SSH port / ciphers |
+| **WARNING** | `[ROUTING]`, `[VLAN]`, `[INTERFACE]` | BGP neighbors / AS, OSPF, default and static routes, VLANs, interface `shutdown` / `no shutdown` / `disable` |
+| **INFO** | `[INFO]` | NTP, description / remark, hostname, banner / MOTD |
+
+* The badge appears next to the diff counts in the result table
+  (`+2/-1 [CRITICAL: ACL]`), in the run summary (`RISK=CRITICAL(ACL)`), and
+  as an inline `<== CRITICAL: ACL` marker on the offending diff lines.
+  CRITICAL and WARNING lines are logged at `WARN` level, and the run summary
+  ends with a **Risk alerts** block.
+* Description / remark lines never escalate, even if the text mentions
+  "radius" or "ospf".
+* Rules live in `internal/backup/risk.go` (`builtinRiskSpecs`, first match
+  wins); add a row there to teach netbackup a new pattern.
+* **Limitation:** with `-redact=true` (the default) secrets are stored as
+  `<REDACTED>`, so rotating a password or SNMP community produces no diff at
+  all. Creating, deleting or re-parameterising a user / community is still
+  detected.
+
+### Golden-config compliance
+
+Provide baselines with `-golden-dir <dir>` and/or `-compliance-rules <file>`.
+A directory holds one `<vendor>.golden` file per platform (the vendor key or
+any alias: `vyos.golden`, `cisco.golden`, `junos.golden`, ...) plus an
+optional `common.golden` that applies to every device. A rules file uses
+`[vendor]` section headers instead (lines before the first header are
+common). See `examples/golden/`.
+
+```text
+# A comment ("!" and "//" also start one). Comments must be on their own line.
+
+# Required line (exact match):
+set service ntp server time1.vyos.net
+
+# Required: at least one line matches this regex:
+re: ^set system syslog host\s+10\.
+
+# Forbidden line:
+not: set service telnet
+
+# Forbidden: no line may match this regex:
+not-re: community\s+public\b
+```
+
+Exact matching ignores indentation, repeated whitespace and quote
+characters. Matching is line based and context free.
+
+* Drifts are reported per device as `missing`, `mismatch` (a line with the
+  same key but another value exists, e.g. `set service ssh port 2222` when
+  `... port 22` is required) or `forbidden`.
+* The result table gains a `COMPLIANCE` column (`✔ COMPLIANT` /
+  `✖ 2 DRIFTS` / `-` when no baseline applies) and a compliance rate line.
+* Devices are checked on every run, including unchanged ones. A baseline that
+  cannot be loaded only disables the check (warning in the log); it never
+  stops the backup.
+
+### HTML & Markdown reports
+
+```bash
+./netbackup ... -html-report 'backups/{run}/report.html' -md-report reports/CHANGELOG.md
+```
+
+* **HTML** is a single self-contained file (inline CSS, no scripts, no
+  external resources, light/dark and mobile friendly): summary cards (total,
+  succeeded, unchanged, changed, failed, compliance rate), a result table with
+  status / risk / compliance badges, collapsible green/red diffs for changed
+  devices (CRITICAL ones start expanded) and a compliance-drift section. It is
+  a snapshot of the run and is overwritten each time.
+* **Markdown** (GitHub-flavored) holds a summary table, a result table and
+  fenced `diff` blocks. When the file already exists it is a running
+  changelog: the new run is inserted at the top and earlier runs are kept (a
+  file that was not created by netbackup is appended to, never overwritten).
+  Use a `{run}` or `{timestamp}` placeholder for one file per run.
+* Path placeholders: `{run}` (e.g. `backup-2026-10-12-0757`), `{timestamp}`
+  (`20261012-075730`) and `{date}` (`2026-10-12`); the `<run>` / `<timestamp>`
+  spellings also work.
+* A report that cannot be written is logged as a warning; it never changes
+  the exit code.
 
 ## Inventory & Multi-Site Credentials
 
