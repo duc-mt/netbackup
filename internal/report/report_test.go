@@ -173,3 +173,36 @@ func TestColorOnlyAppliedToStatusColumn(t *testing.T) {
 		t.Error("expected red ANSI code for an AUTH FAILED row when colorize=true")
 	}
 }
+
+func TestTableWithDiffColumn(t *testing.T) {
+	results := []BackupResult{
+		{
+			HostnameIP: "sw1 (10.0.0.1)",
+			Platform:   "vyos",
+			Status:     StatusSuccess,
+			FileSize:   1234,
+			Duration:   1.5,
+			Diff:       "+2/-1",
+		},
+		{
+			HostnameIP: "sw2 (10.0.0.2)",
+			Platform:   "vyos",
+			Status:     StatusUnchanged,
+			FileSize:   -1,
+			Duration:   1.0,
+			Diff:       "-",
+		},
+	}
+
+	var out, warn bytes.Buffer
+	fprintSummaryTable(&out, &warn, results, false)
+
+	tableStr := out.String()
+	if !strings.Contains(tableStr, "DIFF") {
+		t.Errorf("expected table to contain DIFF column header, got:\n%s", tableStr)
+	}
+	if !strings.Contains(tableStr, "+2/-1") {
+		t.Errorf("expected table to contain '+2/-1', got:\n%s", tableStr)
+	}
+}
+

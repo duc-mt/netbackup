@@ -137,3 +137,44 @@ func TestLoggingJSON(t *testing.T) {
 		t.Errorf("expected message 'info message 1', got %s", entry.Message)
 	}
 }
+
+func TestDiffBlockColors(t *testing.T) {
+	logDir := t.TempDir()
+	logger, err := New(logDir, "text")
+	if err != nil {
+		t.Fatalf("failed to create logger: %v", err)
+	}
+
+	var console strings.Builder
+	logger.out = &console
+	logger.SetColor(true)
+
+	logger.DiffBlock("vyos1", "  ", "+interface eth1 address 1.1.1.1\n-interface eth1 address 2.2.2.2\n context line")
+	logger.Close()
+
+	out := console.String()
+	if !strings.Contains(out, colorAdd+"+interface eth1 address 1.1.1.1"+colorReset) && !strings.Contains(out, colorAdd+"  +interface eth1 address 1.1.1.1"+colorReset) {
+		t.Errorf("expected green color code for '+' line, got: %q", out)
+	}
+	if !strings.Contains(out, colorDel+"-interface eth1 address 2.2.2.2"+colorReset) && !strings.Contains(out, colorDel+"  -interface eth1 address 2.2.2.2"+colorReset) {
+		t.Errorf("expected red color code for '-' line, got: %q", out)
+	}
+	if !strings.Contains(out, "[vyos1]") {
+		t.Errorf("expected host tag [vyos1] in console output: %q", out)
+	}
+
+	// File must NOT contain ANSI escape codes
+	entries, _ := os.ReadDir(logDir)
+	content, _ := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	fileStr := string(content)
+	if strings.Contains(fileStr, "\x1b[") {
+		t.Errorf("log file must not contain ANSI escape codes, got: %q", fileStr)
+	}
+	if !strings.Contains(fileStr, "+interface eth1 address 1.1.1.1") {
+		t.Errorf("log file missing '+' line: %s", fileStr)
+	}
+	if !strings.Contains(fileStr, "-interface eth1 address 2.2.2.2") {
+		t.Errorf("log file missing '-' line: %s", fileStr)
+	}
+}
+

@@ -41,6 +41,7 @@ type BackupResult struct {
 	Status     string  // free-form, e.g. "SUCCESS", "AUTH FAILED", "TIMEOUT" -- matched case-insensitively for color
 	FileSize   int64   // bytes written; use -1 when no size applies (e.g. a failed or skipped-unchanged backup)
 	Duration   float64 // elapsed time in seconds
+	Diff       string  // configuration change diff count e.g. "+3/-1", or "-"
 	Error      error   // nil on success
 }
 
@@ -65,9 +66,11 @@ const (
 	ansiYellow = "\033[33m"
 )
 
-// tableColumns are the headers, in display order. Row cells in tableRow
-// must line up with this slice index for index.
-var tableColumns = [6]string{"HOSTNAME/IP", "PLATFORM", "STATUS", "FILE SIZE", "DURATION", "ERROR"}
+// defaultTableColumns are the headers when no diffs are present.
+var defaultTableColumns = []string{"HOSTNAME/IP", "PLATFORM", "STATUS", "FILE SIZE", "DURATION", "ERROR"}
+
+// diffTableColumns are the headers when at least one device recorded a diff.
+var diffTableColumns = []string{"HOSTNAME/IP", "PLATFORM", "STATUS", "FILE SIZE", "DURATION", "DIFF", "ERROR"}
 
 // maxErrorColumnWidth caps how wide the ERROR column can grow, so one
 // long SSH error message can't blow out the whole table's layout.
@@ -148,7 +151,7 @@ func colorForStatus(status string) string {
 // tableRow holds one row's plain-text cells (no ANSI codes -- used for
 // column-width math) plus the color to apply to the STATUS cell.
 type tableRow struct {
-	cells       [6]string
+	cells       []string
 	statusColor string
 }
 
@@ -170,29 +173,38 @@ func statusWithIcon(status string) string {
 // a formatting failure is recorded as a warning and the cell falls back
 // to "N/A", so one malformed result can't stop the rest of the table
 // from rendering.
-func buildRow(r BackupResult) (tableRow, []string) {
+func buildRow(r BackupResult, showDiff ...bool) (tableRow, []string) {
+	withDiff := false
+	if len(showDiff) > 0 {
+		withDiff = showDiff[0]
+	}
 	var warnings []string
 	row := tableRow{statusColor: colorForStatus(r.Status)}
 
-	row.cells[0] = orDash(r.HostnameIP)
-	row.cells[1] = orDash(r.Platform)
-	row.cells[2] = statusWithIcon(orDash(r.Status))
+	hostCell := orDash(r.HostnameIP)
+	platformCell := orDash(r.Platform)
+	statusCell := statusWithIcon(orDash(r.Status))
 
 	size, err := FormatFileSize(r.FileSize)
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("%s: file size: %v", orDash(r.HostnameIP), err))
 		size = "N/A"
 	}
-	row.cells[3] = size
 
 	dur, err := FormatDuration(r.Duration)
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("%s: duration: %v", orDash(r.HostnameIP), err))
 		dur = "N/A"
 	}
-	row.cells[4] = dur
 
-	row.cells[5] = formatError(r.Error)
+	errCell := formatError(r.Error)
+
+	if withDiff {
+		diffCell := orDash(r.Diff)
+		row.cells = []string{hostCell, platformCell, statusCell, size, dur, diffCell, errCell}
+	} else {
+		row.cells = []string{hostCell, platformCell, statusCell, size, dur, errCell}
+	}
 
 	return row, warnings
 }
@@ -228,21 +240,34 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 		}
 	}()
 
+	showDiff := false
+	for _, r := range results {
+		if r.Diff != "" && r.Diff != "-" {
+			showDiff = true
+			break
+		}
+	}
+
+	cols := defaultTableColumns
+	if showDiff {
+		cols = diffTableColumns
+	}
+
 	rows := make([]tableRow, 0, len(results))
 	for _, r := range results {
-		row, warnings := buildRow(r)
+		row, warnings := buildRow(r, showDiff)
 		rows = append(rows, row)
 		for _, w := range warnings {
 			fmt.Fprintf(warn, "report: %s\n", w)
 		}
 	}
 
-	widths := columnWidths(rows)
+	widths := columnWidths(cols, rows)
 	writeBorder(out, widths, "╭", "┬", "╮")
-	writeHeader(out, widths)
+	writeHeader(out, cols, widths)
 	writeBorder(out, widths, "├", "┼", "┤")
 	for _, row := range rows {
-		writeRow(out, widths, row, colorize)
+		writeRow(out, cols, widths, row, colorize)
 	}
 	writeBorder(out, widths, "╰", "┴", "╯")
 
@@ -276,22 +301,24 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 	}
 }
 
-func columnWidths(rows []tableRow) [6]int {
-	var widths [6]int
-	for i, h := range tableColumns {
+func columnWidths(cols []string, rows []tableRow) []int {
+	widths := make([]int, len(cols))
+	for i, h := range cols {
 		widths[i] = utf8.RuneCountInString(h)
 	}
 	for _, row := range rows {
 		for i, cell := range row.cells {
-			if n := utf8.RuneCountInString(cell); n > widths[i] {
-				widths[i] = n
+			if i < len(widths) {
+				if n := utf8.RuneCountInString(cell); n > widths[i] {
+					widths[i] = n
+				}
 			}
 		}
 	}
 	return widths
 }
 
-func writeBorder(w io.Writer, widths [6]int, left, mid, right string) {
+func writeBorder(w io.Writer, widths []int, left, mid, right string) {
 	fmt.Fprint(w, left)
 	for i, width := range widths {
 		fmt.Fprint(w, strings.Repeat("─", width+2))
@@ -302,19 +329,23 @@ func writeBorder(w io.Writer, widths [6]int, left, mid, right string) {
 	fmt.Fprintln(w, right)
 }
 
-func writeHeader(w io.Writer, widths [6]int) {
+func writeHeader(w io.Writer, cols []string, widths []int) {
 	fmt.Fprint(w, "│")
-	for i, h := range tableColumns {
-		alignRight := (i == 3 || i == 4)
+	for i, h := range cols {
+		alignRight := (h == "FILE SIZE" || h == "DURATION" || h == "DIFF")
 		fmt.Fprintf(w, " %s │", padCell(h, widths[i], alignRight))
 	}
 	fmt.Fprintln(w)
 }
 
-func writeRow(w io.Writer, widths [6]int, row tableRow, colorize bool) {
+func writeRow(w io.Writer, cols []string, widths []int, row tableRow, colorize bool) {
 	fmt.Fprint(w, "│")
 	for i, cell := range row.cells {
-		alignRight := (i == 3 || i == 4)
+		if i >= len(cols) || i >= len(widths) {
+			break
+		}
+		h := cols[i]
+		alignRight := (h == "FILE SIZE" || h == "DURATION" || h == "DIFF")
 		text := padCell(cell, widths[i], alignRight)
 		if colorize && i == 2 && row.statusColor != "" {
 			text = row.statusColor + text + ansiReset
@@ -347,6 +378,7 @@ func MockResults() []BackupResult {
 			Status:     StatusSuccess,
 			FileSize:   45896,
 			Duration:   3.42,
+			Diff:       "+3/-1",
 		},
 		{
 			HostnameIP: "edge-rtr02 (10.0.2.5)",

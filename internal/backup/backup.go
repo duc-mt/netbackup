@@ -59,6 +59,12 @@ type Config struct {
 	// It is the fallback when a device's inventory jump_host name has no
 	// matching NETBACKUP_JUMP_<NAME>_HOST env var.  Empty = no global jump.
 	JumpDefaultHost string
+
+	// ShowDiff controls whether configuration diffs are calculated and logged
+	ShowDiff bool
+
+	// OnDiff callback is invoked when a diff is detected against the latest backup
+	OnDiff func(dev inventory.Device, lines []string, added, removed int)
 }
 
 // jumpPool maintains a lazily-initialised, shared *ssh.Client per unique
@@ -134,13 +140,18 @@ func (c *Config) creds(group string) credentials.Credentials {
 
 // Result is what came of trying to back up one device.
 type Result struct {
-	Device     inventory.Device
-	Success    bool
-	Unchanged  bool
-	Category   errcat.Category
-	Err        error
-	OutputPath string
-	Duration   time.Duration
+	Device      inventory.Device
+	Success     bool
+	Unchanged   bool
+	DiffLines   []string
+	DiffAdded   int
+	DiffRemoved int
+	HasDiff     bool
+	Category    errcat.Category
+	Err         error
+	OutputPath  string
+	DiffPath    string
+	Duration    time.Duration
 }
 
 // RunAll backs up every device in the inventory using a bounded pool of
@@ -229,12 +240,35 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 		}
 	}
 
+	if found && latestHash != currHash {
+		beforeData, err := os.ReadFile(latestPath)
+		if err == nil {
+			dLines, added, removed, ok := diffConfig(string(beforeData), output)
+			if ok && len(dLines) > 0 {
+				result.DiffLines = dLines
+				result.DiffAdded = added
+				result.DiffRemoved = removed
+				result.HasDiff = true
+				if cfg.OnDiff != nil {
+					cfg.OnDiff(dev, dLines, added, removed)
+				}
+			}
+		}
+	}
+
 	path, err := save(dev, profile, output, cfg)
 	if err != nil {
 		cerr := errcat.New(errcat.CategoryIOError, dev.Hostname, "write", err)
 		result.Err = cerr
 		result.Category = cerr.Category
 		return result
+	}
+
+	if result.HasDiff && len(result.DiffLines) > 0 {
+		diffPath := strings.TrimSuffix(path, profile.FileExtension) + ".diff"
+		if err := os.WriteFile(diffPath, []byte(strings.Join(result.DiffLines, "\n")+"\n"), 0o640); err == nil {
+			result.DiffPath = diffPath
+		}
 	}
 
 	if cfg.RetentionCount > 0 || cfg.RetentionDays > 0 {
@@ -450,6 +484,10 @@ func pruneBackups(outputDir string, dev inventory.Device, ext string, keepCount,
 		if deleteFile {
 			if err := os.Remove(f.path); err == nil {
 				pruned++
+				// Also clean up accompanying .diff file if present
+				diffPath := strings.TrimSuffix(f.path, ext) + ".diff"
+				_ = os.Remove(diffPath)
+
 				// Attempt to clean up empty directories
 				dir := filepath.Dir(f.path)
 				if removeEmptyDir(dir) {

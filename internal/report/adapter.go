@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"os"
 
 	"netbackup/internal/backup"
@@ -27,12 +28,17 @@ func FromResults(results []backup.Result) []BackupResult {
 }
 
 func fromResult(r backup.Result) BackupResult {
+	diff := "-"
+	if r.HasDiff || r.DiffAdded > 0 || r.DiffRemoved > 0 {
+		diff = fmt.Sprintf("+%d/-%d", r.DiffAdded, r.DiffRemoved)
+	}
 	return BackupResult{
 		HostnameIP: hostnameIP(r),
 		Platform:   orDash(r.Device.Vendor),
 		Status:     statusFor(r),
 		FileSize:   fileSizeFor(r),
 		Duration:   r.Duration.Seconds(),
+		Diff:       diff,
 		Error:      r.Err,
 	}
 }

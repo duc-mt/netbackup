@@ -59,6 +59,7 @@ type cliOptions struct {
 	knownHostsPolicy      string
 	insecureIgnoreHostKey bool
 	resultTable           bool
+	showDiff              bool
 
 	// Jump host / bastion support
 	jumpEnabled  bool   // master on/off switch
@@ -85,6 +86,8 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for unknown host keys: 'strict' or 'accept-new'")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
 	flag.BoolVar(&opts.resultTable, "result-table", true, "print a colorized per-device result table to stdout after the run")
+	flag.BoolVar(&opts.showDiff, "diff", true, "display colorized diff against previous backup when configuration changes")
+	flag.BoolVar(&opts.showDiff, "show-diff", true, "alias for -diff")
 
 	// Jump host / bastion
 	flag.BoolVar(&opts.jumpEnabled, "jump", true, "enable jump host / bastion routing (set false to connect all devices directly, overriding inventory and env config)")
@@ -167,6 +170,7 @@ func run() int {
 		RetentionCount:  opts.retentionCount,
 		RetentionDays:   opts.retentionDays,
 		SaveUnchanged:   opts.saveUnchanged,
+		ShowDiff:        opts.showDiff,
 		JumpEnabled:     opts.jumpEnabled,
 		JumpDefaultHost: opts.jumpHost,
 		SSH: sshclient.Options{
@@ -174,6 +178,13 @@ func run() int {
 			CommandTimeout:  opts.commandTimeout,
 			HostKeyCallback: hostKeyCallback,
 		},
+	}
+
+	if opts.showDiff {
+		cfg.OnDiff = func(dev inventory.Device, lines []string, added, removed int) {
+			logger.Info("[%s] configuration changes detected (+%d/-%d):", dev.Hostname, added, removed)
+			logger.DiffLines(dev.Hostname, "  ", lines)
+		}
 	}
 
 	logger.Info("starting backup run: %d device(s), concurrency=%d, redact=%t, retention-count=%d, retention-days=%d",
