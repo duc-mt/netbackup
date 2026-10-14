@@ -251,3 +251,10 @@ func TestEmitReportLogsWarningsAndOutcome(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIOptionsDefaults(t *testing.T) {
+	opts := parseFlags()
+	if opts.retries < 0 {
+		t.Errorf("retries should default to >= 0, got %d", opts.retries)
+	}
+}

@@ -4,6 +4,7 @@
 
 # Local inventory & outputs
 inventory.csv
+known_hosts
 backups/
 logs/
 

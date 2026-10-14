@@ -48,6 +48,8 @@ type Config struct {
 	RetentionCount int
 	RetentionDays  int
 	SaveUnchanged  bool
+	Retries        int           // number of retry attempts per device upon failure (default: 0)
+	RetryDelay     time.Duration // pause between retries (default: 2s)
 	SSH            sshclient.Options
 
 	// JumpEnabled globally enables or disables bastion / jump host routing.
@@ -100,7 +102,7 @@ func newJumpPool(opts sshclient.Options) *jumpPool {
 
 // get returns (or lazily creates) the bastion client for addr.
 // addr must be in "host:port" form.
-func (p *jumpPool) get(ctx context.Context, addr, username, password string) (*ssh.Client, error) {
+func (p *jumpPool) get(ctx context.Context, addr string, auth sshclient.AuthOptions) (*ssh.Client, error) {
 	p.mu.Lock()
 	if c, ok := p.clients[addr]; ok {
 		p.mu.Unlock()
@@ -120,7 +122,7 @@ func (p *jumpPool) get(ctx context.Context, addr, username, password string) (*s
 		port = 22
 	}
 
-	c, err := sshclient.ConnectJumpHost(ctx, host, port, username, password, p.opts)
+	c, err := sshclient.ConnectJumpHostWithAuth(ctx, host, port, auth, p.opts)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +255,36 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 	}
 	dev.Vendor = profile.Key
 
-	output, err := fetchConfig(ctx, dev, profile, cfg, pool)
+	attempts := cfg.Retries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	retryDelay := cfg.RetryDelay
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
+	}
+
+	var output string
+	for attempt := 1; attempt <= attempts; attempt++ {
+		output, err = fetchConfig(ctx, dev, profile, cfg, pool)
+		if err == nil {
+			break
+		}
+
+		// If cancelled, do not retry
+		if ctx.Err() != nil {
+			break
+		}
+
+		if attempt < attempts {
+			select {
+			case <-ctx.Done():
+				break
+			case <-time.After(retryDelay):
+			}
+		}
+	}
+
 	if err != nil {
 		if cerr, ok := err.(*errcat.Error); ok {
 			result.Err = cerr
@@ -460,6 +491,11 @@ func resolveJumpAddr(dev inventory.Device, cfg Config) string {
 
 func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profile, cfg Config, pool *jumpPool) (string, error) {
 	creds := cfg.creds(dev.CredentialGroup)
+	devAuth := sshclient.AuthOptions{
+		Username: creds.Username,
+		Password: creds.Password,
+		KeyFile:  creds.KeyFile,
+	}
 
 	var client *ssh.Client
 	var err error
@@ -467,28 +503,34 @@ func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profi
 	jumpAddr := resolveJumpAddr(dev, cfg)
 	if jumpAddr != "" {
 		// Resolve jump credentials: per-named-jump first, then global defaults.
-		var jumpUser, jumpPass string
+		var jumpAuth sshclient.AuthOptions
 		if dev.JumpHost != "" && cfg.CredStore != nil {
 			jc := cfg.CredStore.ForJumpHost(dev.JumpHost)
-			jumpUser = jc.Username
-			jumpPass = jc.Password
+			jumpAuth = sshclient.AuthOptions{
+				Username: jc.Username,
+				Password: jc.Password,
+				KeyFile:  jc.KeyFile,
+			}
 		} else if cfg.CredStore != nil {
 			jd := cfg.CredStore.JumpDefaults()
-			jumpUser = jd.Username
-			jumpPass = jd.Password
+			jumpAuth = sshclient.AuthOptions{
+				Username: jd.Username,
+				Password: jd.Password,
+				KeyFile:  jd.KeyFile,
+			}
 		}
 		// Final fallback: use device credentials for the bastion too.
-		if jumpUser == "" {
-			jumpUser = creds.Username
+		if jumpAuth.Username == "" {
+			jumpAuth = devAuth
 		}
 
-		jumpClient, err := pool.get(ctx, jumpAddr, jumpUser, jumpPass)
+		jumpClient, err := pool.get(ctx, jumpAddr, jumpAuth)
 		if err != nil {
 			return "", errcat.Classify(dev.Hostname, "connect-jump", fmt.Errorf("bastion %s: %w", jumpAddr, err))
 		}
-		client, err = sshclient.ConnectViaJump(ctx, jumpClient, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+		client, err = sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, cfg.SSH)
 	} else {
-		client, err = sshclient.Connect(ctx, dev.Address, dev.Port, creds.Username, creds.Password, cfg.SSH)
+		client, err = sshclient.ConnectWithAuth(ctx, dev.Address, dev.Port, devAuth, cfg.SSH)
 	}
 	if err != nil {
 		return "", errcat.Classify(dev.Hostname, "connect", err)
@@ -507,6 +549,11 @@ func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profi
 	if err != nil {
 		return "", errcat.Classify(dev.Hostname, "command", err)
 	}
+
+	if err := profile.ValidateOutput(output); err != nil {
+		return "", errcat.Classify(dev.Hostname, "validate", err)
+	}
+
 	return output, nil
 }
 

@@ -166,10 +166,14 @@ chmod 600 .env
 | `-compliance-rules` | `""`  | Single rules file with optional `[vendor]` sections; can be combined with `-golden-dir` |
 | `-html-report`    | `""`    | Write a standalone HTML run report to this path |
 | `-md-report`      | `""`    | Write/update a Markdown changelog at this path (newest run first) |
+| `-key-file`       | `""`    | Path to SSH private key file for device authentication (overrides `NETBACKUP_KEY_FILE`) |
+| `-retries`        | `0`     | Number of retry attempts per device upon failure (`0` = no retry) |
+| `-retry-delay`    | `2s`    | Delay between retries per device |
 | `-jump`           | `true`  | Enable bastion/jump host routing (`-jump=false` connects directly) |
 | `-jump-host`      | `""`    | Global default bastion `host[:port]` |
 | `-jump-user`      | `""`    | SSH username for global bastion (overrides `NETBACKUP_JUMP_USERNAME`) |
 | `-jump-password`  | `""`    | SSH password for global bastion (overrides `NETBACKUP_JUMP_PASSWORD`) |
+| `-jump-key-file`  | `""`    | SSH private key file for global bastion (overrides `NETBACKUP_JUMP_KEY_FILE`) |
 
 ### Run Summary Table
 

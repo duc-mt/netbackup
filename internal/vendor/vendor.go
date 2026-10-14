@@ -4,6 +4,7 @@
 package vendor
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -38,8 +39,31 @@ type Profile struct {
 	// BackupCommand is the command whose output is saved as the backup.
 	BackupCommand string
 
+	// EndMarkers optionally lists substrings expected at or near the end
+	// of a complete, untruncated backup output (e.g. "\nend", "\nreturn").
+	// If set and none of the markers match, the backup is considered truncated.
+	EndMarkers []string
+
 	// FileExtension is used when naming the saved backup file.
 	FileExtension string
+}
+
+// ValidateOutput inspects raw captured output for non-empty content and expected end markers.
+// It returns an error if output is empty or if end markers are defined but none matched.
+func (p Profile) ValidateOutput(output string) error {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return errors.New("captured configuration output is empty")
+	}
+	if len(p.EndMarkers) == 0 {
+		return nil
+	}
+	for _, marker := range p.EndMarkers {
+		if strings.Contains(output, marker) {
+			return nil
+		}
+	}
+	return fmt.Errorf("backup appears truncated or incomplete: expected end marker %v not found", p.EndMarkers)
 }
 
 // Profiles is the supported-platform registry. Keys are the lowercase
@@ -50,6 +74,7 @@ var Profiles = map[string]Profile{
 		Name:          "Cisco IOS / IOS-XE",
 		Interactive:   false,
 		BackupCommand: "show running-config",
+		EndMarkers:    []string{"\nend", "\r\nend"},
 		FileExtension: ".cfg",
 	},
 	"huawei_vrp": {
@@ -57,6 +82,7 @@ var Profiles = map[string]Profile{
 		Name:          "Huawei VRP",
 		Interactive:   false,
 		BackupCommand: "display current-configuration",
+		EndMarkers:    []string{"\nreturn", "\r\nreturn"},
 		FileExtension: ".cfg",
 	},
 	"juniper_junos": {
@@ -78,6 +104,7 @@ var Profiles = map[string]Profile{
 		Name:          "Ruijie RGOS",
 		Interactive:   false,
 		BackupCommand: "show running-config",
+		EndMarkers:    []string{"\nend", "\r\nend"},
 		FileExtension: ".cfg",
 	},
 	"fortigate": {
@@ -107,6 +134,7 @@ var Profiles = map[string]Profile{
 		Interactive:   true,
 		SetupCommands: []string{""}, // wake the shell prompt
 		BackupCommand: "cat /cf/conf/config.xml",
+		EndMarkers:    []string{"</pfsense>"},
 		FileExtension: ".xml",
 	},
 	"vyos": {
@@ -121,6 +149,7 @@ var Profiles = map[string]Profile{
 		Name:          "Arista EOS",
 		Interactive:   false,
 		BackupCommand: "show running-config",
+		EndMarkers:    []string{"\nend", "\r\nend"},
 		FileExtension: ".cfg",
 	},
 	// Fallback for anything not explicitly mapped yet.

@@ -95,6 +95,34 @@ NETBACKUP_PARTIAL_USERNAME=partial_user
 	}
 }
 
+func TestStoreKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	content := `
+NETBACKUP_USERNAME=key_admin
+NETBACKUP_KEY_FILE=/path/to/id_ed25519
+NETBACKUP_JUMP_KEY_FILE=/path/to/jump_key
+`
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write temp env file: %v", err)
+	}
+
+	store, err := NewStore(envPath)
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+
+	cDef := store.ForGroup("")
+	if cDef.Username != "key_admin" || cDef.KeyFile != "/path/to/id_ed25519" {
+		t.Errorf("unexpected default key creds: %+v", cDef)
+	}
+
+	jump := store.JumpDefaults()
+	if jump.KeyFile != "/path/to/jump_key" {
+		t.Errorf("unexpected jump key creds: %+v", jump)
+	}
+}
+
 func TestUnquote(t *testing.T) {
 	tests := []struct {
 		input    string

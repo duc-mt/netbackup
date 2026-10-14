@@ -14,9 +14,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +52,12 @@ func startMockSSHServer(t *testing.T) (int, func()) {
 				}
 			}
 			return nil, fmt.Errorf("keyboard interactive rejected")
+		},
+		PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+			if c.User() == "keyuser" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("public key rejected")
 		},
 	}
 	serverConfig.AddHostKey(signer)
@@ -215,6 +223,50 @@ func TestKeyboardInteractiveAuth(t *testing.T) {
 		t.Fatalf("expected successful connect with keyboard-interactive: %v", err)
 	}
 	defer client.Close()
+}
+
+func TestPublicKeyAuth(t *testing.T) {
+	port, cleanup := startMockSSHServer(t)
+	defer cleanup()
+
+	// Generate client private key
+	_, clientPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating client key: %v", err)
+	}
+	pemBytes, err := ssh.MarshalPrivateKey(clientPriv, "")
+	if err != nil {
+		t.Fatalf("marshaling private key: %v", err)
+	}
+	keyFile := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(pemBytes), 0o600); err != nil {
+		t.Fatalf("writing temp key file: %v", err)
+	}
+
+	opts := Options{
+		ConnectTimeout:  2 * time.Second,
+		CommandTimeout:  2 * time.Second,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	// 1. Connect with private key file
+	client, err := ConnectWithAuth(context.Background(), "127.0.0.1", port, AuthOptions{
+		Username: "keyuser",
+		KeyFile:  keyFile,
+	}, opts)
+	if err != nil {
+		t.Fatalf("expected successful connect with public key: %v", err)
+	}
+	defer client.Close()
+
+	// 2. Reject unknown keyuser
+	_, err = ConnectWithAuth(context.Background(), "127.0.0.1", port, AuthOptions{
+		Username: "wrongkeyuser",
+		KeyFile:  keyFile,
+	}, opts)
+	if err == nil {
+		t.Fatalf("expected connection to fail for wrong key user")
+	}
 }
 
 func TestRunCommandTimeout(t *testing.T) {

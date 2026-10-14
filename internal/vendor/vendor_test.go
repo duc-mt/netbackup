@@ -70,3 +70,36 @@ func TestKnownKeys(t *testing.T) {
 		t.Errorf("expected at least 6 vendor profiles, got %d", len(keys))
 	}
 }
+
+func TestValidateOutput(t *testing.T) {
+	cisco, err := Get("cisco_ios")
+	if err != nil {
+		t.Fatalf("Get(cisco_ios): %v", err)
+	}
+
+	// 1. Empty output
+	if err := cisco.ValidateOutput("   \n\t  "); err == nil {
+		t.Errorf("expected error for empty output")
+	}
+
+	// 2. Complete output matching end marker
+	validConfig := "hostname switch1\ninterface gig0/1\nend\n"
+	if err := cisco.ValidateOutput(validConfig); err != nil {
+		t.Errorf("unexpected error for valid config: %v", err)
+	}
+
+	// 3. Truncated output missing end marker
+	truncatedConfig := "hostname switch1\ninterface gig0/1\n"
+	if err := cisco.ValidateOutput(truncatedConfig); err == nil {
+		t.Errorf("expected error for truncated config missing 'end'")
+	}
+
+	// 4. Vendor without end markers (e.g. generic)
+	generic, err := Get("generic")
+	if err != nil {
+		t.Fatalf("Get(generic): %v", err)
+	}
+	if err := generic.ValidateOutput("some random text"); err != nil {
+		t.Errorf("unexpected error for generic profile: %v", err)
+	}
+}

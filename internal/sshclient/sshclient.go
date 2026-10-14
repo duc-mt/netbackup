@@ -151,11 +151,23 @@ func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallba
 	}, nil
 }
 
+// AuthOptions contains authentication parameters for SSH connections.
+type AuthOptions struct {
+	Username string
+	Password string
+	KeyFile  string
+}
+
 // Connect opens a TCP connection and completes the SSH handshake, both
 // bounded by opts.ConnectTimeout so an unreachable or black-holed device
 // can never hang the run. It also respects ctx: cancelling ctx (e.g. on
 // SIGINT/SIGTERM) aborts an in-progress dial immediately.
 func Connect(ctx context.Context, address string, port int, username, password string, opts Options) (*ssh.Client, error) {
+	return ConnectWithAuth(ctx, address, port, AuthOptions{Username: username, Password: password}, opts)
+}
+
+// ConnectWithAuth opens an SSH connection supporting passwords and private key files.
+func ConnectWithAuth(ctx context.Context, address string, port int, auth AuthOptions, opts Options) (*ssh.Client, error) {
 	if opts.HostKeyCallback == nil {
 		return nil, ErrNoHostKeyCallback
 	}
@@ -168,7 +180,11 @@ func Connect(ctx context.Context, address string, port int, username, password s
 		return nil, fmt.Errorf("dial: %w", err)
 	}
 
-	config := buildClientConfig(username, password, opts.HostKeyCallback, opts)
+	config, err := buildClientConfig(auth, opts.HostKeyCallback, opts)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("auth config: %w", err)
+	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
 		conn.Close()
@@ -184,6 +200,11 @@ func Connect(ctx context.Context, address string, port int, username, password s
 // The caller is responsible for calling Close() on the returned client when
 // the run is done.
 func ConnectJumpHost(ctx context.Context, address string, port int, username, password string, opts Options) (*ssh.Client, error) {
+	return ConnectJumpHostWithAuth(ctx, address, port, AuthOptions{Username: username, Password: password}, opts)
+}
+
+// ConnectJumpHostWithAuth opens an SSH connection to a bastion using AuthOptions.
+func ConnectJumpHostWithAuth(ctx context.Context, address string, port int, auth AuthOptions, opts Options) (*ssh.Client, error) {
 	hkCb := opts.JumpHostKeyCallback
 	if hkCb == nil {
 		hkCb = opts.HostKeyCallback
@@ -199,7 +220,11 @@ func ConnectJumpHost(ctx context.Context, address string, port int, username, pa
 		return nil, fmt.Errorf("dial jump host: %w", err)
 	}
 
-	config := buildClientConfig(username, password, hkCb, opts)
+	config, err := buildClientConfig(auth, hkCb, opts)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("jump host auth config: %w", err)
+	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
 		conn.Close()
@@ -216,6 +241,11 @@ func ConnectJumpHost(ctx context.Context, address string, port int, username, pa
 // jumpClient is safe to share across goroutines; pass the same value for all
 // devices that route through the same bastion.
 func ConnectViaJump(ctx context.Context, jumpClient *ssh.Client, address string, port int, username, password string, opts Options) (*ssh.Client, error) {
+	return ConnectViaJumpWithAuth(ctx, jumpClient, address, port, AuthOptions{Username: username, Password: password}, opts)
+}
+
+// ConnectViaJumpWithAuth opens a ProxyJump-style connection using AuthOptions.
+func ConnectViaJumpWithAuth(ctx context.Context, jumpClient *ssh.Client, address string, port int, auth AuthOptions, opts Options) (*ssh.Client, error) {
 	if opts.HostKeyCallback == nil {
 		return nil, ErrNoHostKeyCallback
 	}
@@ -229,7 +259,11 @@ func ConnectViaJump(ctx context.Context, jumpClient *ssh.Client, address string,
 		return nil, fmt.Errorf("jump tunnel to %s: %w", targetAddr, err)
 	}
 
-	config := buildClientConfig(username, password, opts.HostKeyCallback, opts)
+	config, err := buildClientConfig(auth, opts.HostKeyCallback, opts)
+	if err != nil {
+		tunnelConn.Close()
+		return nil, fmt.Errorf("auth config via jump: %w", err)
+	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(tunnelConn, targetAddr, config)
 	if err != nil {
 		tunnelConn.Close()
@@ -240,20 +274,51 @@ func ConnectViaJump(ctx context.Context, jumpClient *ssh.Client, address string,
 
 // buildClientConfig is a shared helper so Connect, ConnectJumpHost, and
 // ConnectViaJump all use the exact same auth methods and cipher suite.
-func buildClientConfig(username, password string, hkCb ssh.HostKeyCallback, opts Options) *ssh.ClientConfig {
-	return &ssh.ClientConfig{
-		User: username,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
+func buildClientConfig(auth AuthOptions, hkCb ssh.HostKeyCallback, opts Options) (*ssh.ClientConfig, error) {
+	var authMethods []ssh.AuthMethod
+
+	if auth.KeyFile != "" {
+		keyBytes, err := os.ReadFile(auth.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading SSH private key %q: %w", auth.KeyFile, err)
+		}
+		var signer ssh.Signer
+		if auth.Password != "" {
+			signer, err = ssh.ParsePrivateKeyWithPassphrase(keyBytes, []byte(auth.Password))
+			if err != nil {
+				// Fall back to unencrypted parse in case password was only device password
+				signer, err = ssh.ParsePrivateKey(keyBytes)
+			}
+		} else {
+			signer, err = ssh.ParsePrivateKey(keyBytes)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parsing SSH private key %q: %w", auth.KeyFile, err)
+		}
+		authMethods = append(authMethods, ssh.PublicKeys(signer))
+	}
+
+	if auth.Password != "" {
+		authMethods = append(authMethods,
+			ssh.Password(auth.Password),
 			ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
 				answers := make([]string, len(questions))
 				for i := range answers {
-					answers[i] = password
+					answers[i] = auth.Password
 				}
 				return answers, nil
 			}),
-		},
-		HostKeyCallback: hkCb,
+		)
+	}
+
+	if len(authMethods) == 0 {
+		return nil, errors.New("no SSH authentication methods provided (specify password or key file)")
+	}
+
+	return &ssh.ClientConfig{
+		User:              auth.Username,
+		Auth:              authMethods,
+		HostKeyCallback:   hkCb,
 		HostKeyAlgorithms: []string{
 			ssh.KeyAlgoED25519,
 			ssh.KeyAlgoECDSA256,
@@ -287,7 +352,7 @@ func buildClientConfig(username, password string, hkCb ssh.HostKeyCallback, opts
 				"diffie-hellman-group1-sha1",
 			},
 		},
-	}
+	}, nil
 }
 
 // RunCommand executes a single command on a plain (non-interactive, no PTY)

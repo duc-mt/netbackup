@@ -212,3 +212,41 @@ func TestRunAll(t *testing.T) {
 		t.Errorf("expected unreachable device to fail")
 	}
 }
+
+func TestRunAllWithRetries(t *testing.T) {
+	dir := t.TempDir()
+	devices := []inventory.Device{
+		{
+			Hostname: "sw-unreachable",
+			Address:  "127.0.0.1",
+			Port:     65432,
+			Vendor:   "cisco_ios",
+		},
+	}
+
+	cfg := Config{
+		OutputDir:   dir,
+		Concurrency: 1,
+		Retries:     1,
+		RetryDelay:  10 * time.Millisecond,
+		SSH: sshclient.Options{
+			ConnectTimeout: 50 * time.Millisecond,
+			CommandTimeout: 50 * time.Millisecond,
+		},
+	}
+
+	start := time.Now()
+	results := RunAll(context.Background(), devices, cfg)
+	elapsed := time.Since(start)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Success {
+		t.Errorf("expected unreachable device to fail after retries")
+	}
+	// At least 1 retry delay was observed
+	if elapsed < 10*time.Millisecond {
+		t.Errorf("expected retries to take at least 10ms, took %v", elapsed)
+	}
+}

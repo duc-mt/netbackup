@@ -70,11 +70,16 @@ type cliOptions struct {
 	htmlReport       string // path of the HTML run report ("" = none)
 	mdReport         string // path of the Markdown changelog ("" = none)
 
+	keyFile          string // path to SSH private key file (overrides NETBACKUP_KEY_FILE)
+	retries          int    // number of retry attempts per device
+	retryDelay       time.Duration // pause between retries
+
 	// Jump host / bastion support
 	jumpEnabled  bool   // master on/off switch
 	jumpHost     string // host[:port] -- global default bastion
 	jumpUser     string // bastion SSH username (overrides NETBACKUP_JUMP_USERNAME)
 	jumpPassword string // bastion SSH password (overrides NETBACKUP_JUMP_PASSWORD)
+	jumpKeyFile  string // bastion SSH private key file (overrides NETBACKUP_JUMP_KEY_FILE)
 }
 
 func parseFlags() cliOptions {
@@ -84,6 +89,9 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.logDir, "log-dir", "logs", "directory to write run logs into")
 	flag.StringVar(&opts.logFormat, "log-format", "text", "log output format (text or json)")
 	flag.StringVar(&opts.envFile, "env-file", ".env", "path to an optional .env file holding NETBACKUP_USERNAME / NETBACKUP_PASSWORD")
+	flag.StringVar(&opts.keyFile, "key-file", "", "path to an SSH private key file for device authentication (overrides NETBACKUP_KEY_FILE)")
+	flag.IntVar(&opts.retries, "retries", 0, "number of retry attempts per device upon failure (default: 0)")
+	flag.DurationVar(&opts.retryDelay, "retry-delay", 2*time.Second, "delay between retries per device (default: 2s)")
 	flag.IntVar(&opts.concurrency, "concurrency", 5, "maximum number of devices to back up in parallel")
 	flag.DurationVar(&opts.connectTimeout, "connect-timeout", 10*time.Second, "TCP connect + SSH handshake timeout per device")
 	flag.DurationVar(&opts.commandTimeout, "command-timeout", 30*time.Second, "time budget for running the backup command per device")
@@ -109,6 +117,7 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.jumpHost, "jump-host", "", "global default bastion host[:port] for devices not reachable directly (e.g. mgmt-gw.example.com:22)")
 	flag.StringVar(&opts.jumpUser, "jump-user", "", "SSH username for the global jump host (overrides NETBACKUP_JUMP_USERNAME)")
 	flag.StringVar(&opts.jumpPassword, "jump-password", "", "SSH password for the global jump host (overrides NETBACKUP_JUMP_PASSWORD)")
+	flag.StringVar(&opts.jumpKeyFile, "jump-key-file", "", "SSH private key file for the global jump host (overrides NETBACKUP_JUMP_KEY_FILE)")
 
 	flag.Parse()
 	return opts
@@ -140,13 +149,19 @@ func run() int {
 	}
 	logger.Info("loaded %d device(s) from %s", len(devices), opts.inventoryPath)
 
-	// Inject jump CLI flags into the environment before NewStore reads them,
+	// Inject CLI credential flags into the environment before NewStore reads them,
 	// so credential resolution stays in one place (the credentials package).
+	if opts.keyFile != "" {
+		os.Setenv(credentials.EnvKeyFile, opts.keyFile)
+	}
 	if opts.jumpUser != "" {
 		os.Setenv(credentials.EnvJumpUsername, opts.jumpUser)
 	}
 	if opts.jumpPassword != "" {
 		os.Setenv(credentials.EnvJumpPassword, opts.jumpPassword)
+	}
+	if opts.jumpKeyFile != "" {
+		os.Setenv(credentials.EnvJumpKeyFile, opts.jumpKeyFile)
 	}
 	if opts.jumpHost != "" {
 		os.Setenv(credentials.EnvJumpHost, opts.jumpHost)
@@ -187,6 +202,8 @@ func run() int {
 		RetentionCount:  opts.retentionCount,
 		RetentionDays:   opts.retentionDays,
 		SaveUnchanged:   opts.saveUnchanged,
+		Retries:         opts.retries,
+		RetryDelay:      opts.retryDelay,
 		ShowDiff:        opts.showDiff,
 		JumpEnabled:     opts.jumpEnabled,
 		JumpDefaultHost: opts.jumpHost,
