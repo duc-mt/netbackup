@@ -70,9 +70,9 @@ type cliOptions struct {
 	htmlReport       string // path of the HTML run report ("" = none)
 	mdReport         string // path of the Markdown changelog ("" = none)
 
-	keyFile          string // path to SSH private key file (overrides NETBACKUP_KEY_FILE)
-	retries          int    // number of retry attempts per device
-	retryDelay       time.Duration // pause between retries
+	keyFile    string        // path to SSH private key file (overrides NETBACKUP_KEY_FILE)
+	retries    int           // number of retry attempts per device
+	retryDelay time.Duration // pause between retries
 
 	// Jump host / bastion support
 	jumpEnabled  bool   // master on/off switch

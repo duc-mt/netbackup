@@ -316,9 +316,9 @@ func buildClientConfig(auth AuthOptions, hkCb ssh.HostKeyCallback, opts Options)
 	}
 
 	return &ssh.ClientConfig{
-		User:              auth.Username,
-		Auth:              authMethods,
-		HostKeyCallback:   hkCb,
+		User:            auth.Username,
+		Auth:            authMethods,
+		HostKeyCallback: hkCb,
 		HostKeyAlgorithms: []string{
 			ssh.KeyAlgoED25519,
 			ssh.KeyAlgoECDSA256,
