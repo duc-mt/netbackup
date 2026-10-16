@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFormatFileSize(t *testing.T) {
@@ -203,5 +204,38 @@ func TestTableWithDiffColumn(t *testing.T) {
 	}
 	if !strings.Contains(tableStr, "+2/-1") {
 		t.Errorf("expected table to contain '+2/-1', got:\n%s", tableStr)
+	}
+}
+
+func TestTableWithTotalRuntime(t *testing.T) {
+	results := []BackupResult{
+		{
+			HostnameIP: "sw1 (10.0.0.1)",
+			Platform:   "vyos",
+			Status:     StatusSuccess,
+			FileSize:   1234,
+			Duration:   1.5,
+		},
+		{
+			HostnameIP: "sw2 (10.0.0.2)",
+			Platform:   "vyos",
+			Status:     StatusSuccess,
+			FileSize:   1234,
+			Duration:   1.0,
+		},
+	}
+
+	// Case 1: computed from sum of device durations
+	var out1, warn1 bytes.Buffer
+	fprintSummaryTable(&out1, &warn1, results, false)
+	if !strings.Contains(out1.String(), "Total Runtime: 2.50s") {
+		t.Errorf("expected Total Runtime: 2.50s, got:\n%s", out1.String())
+	}
+
+	// Case 2: explicit wall-clock total runtime
+	var out2, warn2 bytes.Buffer
+	fprintSummaryTable(&out2, &warn2, results, false, 5*time.Second)
+	if !strings.Contains(out2.String(), "Total Runtime: 5.00s") {
+		t.Errorf("expected Total Runtime: 5.00s, got:\n%s", out2.String())
 	}
 }

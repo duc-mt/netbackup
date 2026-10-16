@@ -101,6 +101,7 @@ func TestLogging(t *testing.T) {
 		"FAILED  fw-01                (10.0.0.3) category=AUTHENTICATION_FAILED",
 		"FAILED  rtr-01               (10.0.0.4) category=COMMAND_TIMEOUT",
 		"Devices: 4 total, 2 succeeded, 2 failed",
+		"Total runtime: 650ms",
 		"AUTHENTICATION_FAILED               1",
 		"COMMAND_TIMEOUT                     1",
 	}

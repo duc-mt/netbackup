@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -334,15 +335,15 @@ func orDash(s string) string {
 // to stderr as warnings (see buildRow) and a recover() guards against
 // anything unforeseen in the rendering itself, printing a one-line
 // warning instead of taking down the caller's main goroutine.
-func PrintSummaryTable(results []BackupResult) {
+func PrintSummaryTable(results []BackupResult, totalRuntime ...time.Duration) {
 	colorize := os.Getenv("NO_COLOR") == "" && term.IsTerminal(int(os.Stdout.Fd()))
-	fprintSummaryTable(os.Stdout, os.Stderr, results, colorize)
+	fprintSummaryTable(os.Stdout, os.Stderr, results, colorize, totalRuntime...)
 }
 
 // fprintSummaryTable does the real work against explicit writers so it
 // can be exercised by tests without touching the process's real
 // stdout/stderr.
-func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bool) {
+func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bool, totalRuntime ...time.Duration) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(warn, "report: recovered while rendering result table: %v\n", r)
@@ -381,6 +382,7 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 
 	if len(results) > 0 {
 		var succeeded, failed int
+		var sumDur float64
 		for _, r := range results {
 			s := strings.ToUpper(r.Status)
 			switch {
@@ -388,6 +390,9 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 				succeeded++
 			default:
 				failed++
+			}
+			if r.Duration > 0 {
+				sumDur += r.Duration
 			}
 		}
 		green := func(s string) string {
@@ -402,9 +407,22 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 			}
 			return s
 		}
-		fmt.Fprintf(out, "\n  %s  │  %s  │  (total %d)\n",
+
+		var durSec float64
+		if len(totalRuntime) > 0 && totalRuntime[0] > 0 {
+			durSec = totalRuntime[0].Seconds()
+		} else {
+			durSec = sumDur
+		}
+		durStr, err := FormatDuration(durSec)
+		if err != nil {
+			durStr = "-"
+		}
+
+		fmt.Fprintf(out, "\n  %s  │  %s  │  Total Runtime: %s  │  (total %d)\n",
 			green(fmt.Sprintf("✔ Succeeded: %d", succeeded)),
 			red(fmt.Sprintf("✖ Failed: %d", failed)),
+			durStr,
 			len(results))
 
 		if line, color := riskSummaryLine(results); line != "" {

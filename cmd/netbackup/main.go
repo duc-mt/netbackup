@@ -105,6 +105,8 @@ func parseFlags() cliOptions {
 	flag.BoolVar(&opts.resultTable, "result-table", true, "print a colorized per-device result table to stdout after the run")
 	flag.BoolVar(&opts.showDiff, "diff", true, "display colorized diff against previous backup when configuration changes")
 	flag.BoolVar(&opts.showDiff, "show-diff", true, "alias for -diff")
+	flag.BoolVar(&opts.showDiff, "verbose", true, "alias for -diff")
+	flag.BoolVar(&opts.showDiff, "v", true, "alias for -diff")
 	flag.BoolVar(&opts.ignoreVolatile, "ignore-volatile", true, "ignore volatile lines (\"! Last configuration change at\", \"## Last commit\", ntp clock-period, ...) when detecting changes; saved files are never modified")
 	flag.StringVar(&opts.volatilePatterns, "volatile-patterns", "", "optional file with extra volatile-line regular expressions, one per line (# starts a comment)")
 	flag.StringVar(&opts.goldenDir, "golden-dir", "", "directory of <vendor>.golden baseline files (plus optional common.golden); enables golden-config compliance checks")
@@ -227,8 +229,10 @@ func run() int {
 	logger.Info("starting backup run: %d device(s), concurrency=%d, redact=%t, retention-count=%d, retention-days=%d",
 		len(devices), cfg.Concurrency, cfg.Redact, cfg.RetentionCount, cfg.RetentionDays)
 
+	runStart := time.Now()
 	results := backup.RunAll(ctx, devices, cfg)
-	failures := logger.Summary(results)
+	totalDuration := time.Since(runStart)
+	failures := logger.Summary(results, totalDuration)
 
 	// The log summary above is for the run log (file + stderr, plain
 	// text, machine-greppable). This table is a separate, human-facing
@@ -236,7 +240,7 @@ func run() int {
 	// goes wrong, so it's safe to always attempt.
 	rows := report.FromResults(results)
 	if opts.resultTable {
-		report.PrintSummaryTable(rows)
+		report.PrintSummaryTable(rows, totalDuration)
 	}
 
 	// Shareable reports. Like the table, they never abort the run: any

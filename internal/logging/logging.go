@@ -235,7 +235,7 @@ func splitLines(s string) []string {
 // warnings (a skipped or failed analysis step), golden-config compliance
 // drifts, and a "Risk alerts" block listing the security- and
 // routing-relevant changes of the run.
-func (l *Logger) Summary(results []backup.Result) int {
+func (l *Logger) Summary(results []backup.Result, totalRuntime ...time.Duration) int {
 	failures := 0
 	byCategory := make(map[errcat.Category]int)
 
@@ -264,8 +264,20 @@ func (l *Logger) Summary(results []backup.Result) int {
 		l.deviceNotes(r)
 	}
 
+	var totalDur time.Duration
+	if len(totalRuntime) > 0 && totalRuntime[0] > 0 {
+		totalDur = totalRuntime[0]
+	} else {
+		for _, r := range results {
+			totalDur += r.Duration
+		}
+	}
+
 	l.Info("---- Totals ----")
 	l.Info("Devices: %d total, %d succeeded, %d failed", len(results), len(results)-failures, failures)
+	if totalDur > 0 {
+		l.Info("Total runtime: %s", totalDur.Round(time.Millisecond))
+	}
 	if failures > 0 {
 		cats := make([]string, 0, len(byCategory))
 		for c := range byCategory {
