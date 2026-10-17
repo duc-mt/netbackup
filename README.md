@@ -123,10 +123,13 @@ and consistent with `go.mod` (true here) — no flags needed, and no
 
 ### 1. Initialize configuration
 
-Fastest way:
+Fastest way (with the single binary, zero dependencies):
 ```bash
-make init
+netbackup -init
 ```
+*(Or if using the repository with Make: `make init`)*
+
+This automatically creates `.env` (with `chmod 600`) and `inventory.csv` without overwriting existing files.
 
 Or manually:
 ```bash
@@ -155,6 +158,7 @@ chmod 600 .env
 
 | Flag | Default | Description |
 |---|---|---|
+| `-init` | `false` | Generate sample `inventory.csv` and `.env` template in current directory and exit |
 | `-inventory` | `inventory.csv` | Path to CSV inventory file |
 | `-out` | `backups` | Directory to write backup configuration files into |
 | `-log-dir` | `logs` | Directory to write run logs into |
