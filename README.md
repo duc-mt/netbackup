@@ -12,11 +12,22 @@ any stage.
 No matter what device or OS you are using (Linux, macOS, Windows, x86_64, ARM64), you don't need to remember binary names or build steps.
 
 ### Option 1: Universal Auto-Detect Script (Linux / macOS / Windows)
-Simply execute `./run.sh` (or `run.bat` on Windows). It automatically detects your host OS and CPU architecture and launches the correct pre-built binary:
+Simply execute `./run` (or `.\scripts\run.bat` on native Windows CMD). It automatically detects your host OS and CPU architecture and launches the correct pre-built binary:
 
 ```bash
 make init          # 1. Initialize .env and inventory.csv
-./run.sh           # 2. Automatically launches the matching pre-built binary
+./run              # 2. Automatically launches the matching pre-built binary
+```
+
+### Viewing Backups (`./show-backup`)
+Quickly view or locate the latest configuration backup or diff for any node:
+
+```bash
+./show-backup <node-name>     # View latest configuration in terminal pager
+./show-backup GW-01           # Prompts interactive selection if multiple match
+./show-backup -d <node-name>  # View latest diff
+./show-backup -p <node-name>  # Print exact file path only
+./show-backup -l              # List all available nodes with backups
 ```
 
 ### Option 2: Docker / Docker Compose
@@ -177,7 +188,7 @@ chmod 600 .env
 
 ### Run Summary Table
 
-When `-result-table=true` (or when running via `./run.sh` / `run.bat`), netbackup outputs a summary table featuring rounded box borders (`╭ ╮ ╰ ╯`), colorized status badges, and right-aligned metrics:
+When `-result-table=true` (or when running via `./run`), netbackup outputs a summary table featuring rounded box borders (`╭ ╮ ╰ ╯`), colorized status badges, and right-aligned metrics:
 
 ```text
 ╭─────────────────────────┬──────────────────┬───────────────┬───────────┬──────────┬──────────────────────────────────────────────────╮
