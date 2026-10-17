@@ -3,7 +3,7 @@
 *.env
 
 # Local inventory & outputs
-inventory.csv
+/inventory.csv
 known_hosts
 backups/
 logs/

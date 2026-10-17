@@ -1,0 +1,18 @@
+hostname,address,port,vendor,credential_group,jump_host
+# One device per line. port, vendor, credential_group, and jump_host are optional:
+#   - port defaults to 22
+#   - vendor defaults to "generic" (runs "show running-config")
+#   - credential_group defaults to "default" (uses NETBACKUP_USERNAME/PASSWORD)
+#   - jump_host: leave blank for direct connections; set to a bastion name or
+#     host[:port] for devices reachable only via a management server / jump host.
+#     Hybrid mode: -jump-host flag sets the global default; per-device column overrides it.
+# Supported vendor keys: cisco_ios, huawei_vrp, juniper_junos, aruba,
+# ruijie, fortigate, checkpoint_gaia, pfsense, generic
+core-sw-itoshtp-01,10.10.1.1,22,cisco_ios,site_hcm,
+dc-tanthuan-fw-01,10.20.1.1,22,fortigate,site_dc,bastion-dc
+vpcmt8-fw-01,10.30.1.1,22,checkpoint_gaia,site_hcm,
+vptt-ap-ctrl-01,10.40.1.1,22,aruba,default,
+cmt8-core-sw-01,10.50.1.1,22,ruijie,site_hcm,mgmt-gw.site-hcm.example.com:22
+dc-tanthuan-edge-rtr-01,10.20.2.1,22,juniper_junos,site_dc,bastion-dc
+cmt8-dist-sw-01,10.50.2.1,22,huawei_vrp,site_hcm,
+vp-cmt8-perimeter-fw-01,10.30.2.1,22,pfsense,default,
