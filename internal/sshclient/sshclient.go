@@ -69,6 +69,10 @@ type Options struct {
 	// JumpHostKeyCallback, when non-nil, is used to verify the bastion /
 	// jump host's own key. Falls back to HostKeyCallback when nil.
 	JumpHostKeyCallback ssh.HostKeyCallback
+
+	// TCPMSS clamps the TCP Maximum Segment Size on outgoing sockets.
+	// 0 = default (1360), <0 = disabled (OS default).
+	TCPMSS int
 }
 
 // ErrNoHostKeyCallback is returned by Connect when opts.HostKeyCallback is
@@ -174,7 +178,7 @@ func ConnectWithAuth(ctx context.Context, address string, port int, auth AuthOpt
 
 	addr := net.JoinHostPort(address, fmt.Sprintf("%d", port))
 
-	dialer := net.Dialer{Timeout: opts.ConnectTimeout}
+	dialer := newDialer(opts.ConnectTimeout, opts.TCPMSS)
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -214,7 +218,7 @@ func ConnectJumpHostWithAuth(ctx context.Context, address string, port int, auth
 	}
 
 	addr := net.JoinHostPort(address, fmt.Sprintf("%d", port))
-	dialer := net.Dialer{Timeout: opts.ConnectTimeout}
+	dialer := newDialer(opts.ConnectTimeout, opts.TCPMSS)
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial jump host: %w", err)

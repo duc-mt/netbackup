@@ -32,6 +32,7 @@ import (
 	"netbackup/internal/credentials"
 	"netbackup/internal/errcat"
 	"netbackup/internal/inventory"
+	"netbackup/internal/memory"
 	"netbackup/internal/redact"
 	"netbackup/internal/sshclient"
 	"netbackup/internal/vendor"
@@ -82,22 +83,47 @@ type Config struct {
 	// Baseline holds the golden-config rules every device is checked
 	// against. Nil disables compliance checking.
 	Baseline *compliance.Baseline
+
+	// Route memory & auto-fallback
+	MemStore            *memory.Store
+	AutoFallbackDevices []inventory.Device
 }
 
 // jumpPool maintains a lazily-initialised, shared *ssh.Client per unique
-// bastion address. (*ssh.Client).Dial is concurrency-safe, so workers can
-// share the same bastion client without locking.
+// bastion address and persists learned route memory.
 type jumpPool struct {
-	mu      sync.Mutex
-	clients map[string]*ssh.Client // keyed by "host:port"
-	opts    sshclient.Options
+	mu          sync.Mutex
+	clients     map[string]*ssh.Client // keyed by "host:port"
+	badBastions map[string]bool        // hosts that failed direct connection
+	memStore    *memory.Store
+	opts        sshclient.Options
 }
 
-func newJumpPool(opts sshclient.Options) *jumpPool {
+func newJumpPool(opts sshclient.Options, memStore *memory.Store) *jumpPool {
 	return &jumpPool{
-		clients: make(map[string]*ssh.Client),
-		opts:    opts,
+		clients:     make(map[string]*ssh.Client),
+		badBastions: make(map[string]bool),
+		memStore:    memStore,
+		opts:        opts,
 	}
+}
+
+func (p *jumpPool) markBadBastion(addr string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.badBastions[addr] = true
+}
+
+func (p *jumpPool) isBadBastion(addr string) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.badBastions[addr]
 }
 
 // get returns (or lazily creates) the bastion client for addr.
@@ -209,7 +235,7 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 		cfg.RunName = DefaultRunName(time.Now())
 	}
 
-	pool := newJumpPool(cfg.SSH)
+	pool := newJumpPool(cfg.SSH, cfg.MemStore)
 	defer pool.closeAll()
 
 	results := make([]Result, len(devices))
@@ -529,8 +555,98 @@ func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profi
 			return "", errcat.Classify(dev.Hostname, "connect-jump", fmt.Errorf("bastion %s: %w", jumpAddr, err))
 		}
 		client, err = sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, cfg.SSH)
+		if err != nil {
+			return "", errcat.Classify(dev.Hostname, "connect", err)
+		}
 	} else {
-		client, err = sshclient.ConnectWithAuth(ctx, dev.Address, dev.Port, devAuth, cfg.SSH)
+		// 2. Learned route memory (persisted from earlier runs)
+		connectedViaMemory := false
+		if cfg.JumpEnabled && pool != nil && pool.memStore != nil {
+			if rec, ok := pool.memStore.Get(dev.Address); ok {
+				for _, cand := range cfg.AutoFallbackDevices {
+					candEndpoint := cand.Endpoint()
+					if candEndpoint == rec.JumpEndpoint || cand.Address == rec.JumpEndpoint || cand.Hostname == rec.JumpHost {
+						candCreds := cfg.creds(cand.CredentialGroup)
+						candAuth := sshclient.AuthOptions{
+							Username: candCreds.Username,
+							Password: candCreds.Password,
+							KeyFile:  candCreds.KeyFile,
+						}
+						jumpClient, err := pool.get(ctx, candEndpoint, candAuth)
+						if err == nil {
+							cl, err := sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, cfg.SSH)
+							if err == nil {
+								client = cl
+								connectedViaMemory = true
+								_ = pool.memStore.Record(dev.Hostname, dev.Address, cand.Hostname, candEndpoint, "memory-active")
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 3. Direct connection
+		if !connectedViaMemory {
+			directOpts := cfg.SSH
+			if cfg.JumpEnabled && len(cfg.AutoFallbackDevices) > 0 && directOpts.ConnectTimeout > 3500*time.Millisecond {
+				directOpts.ConnectTimeout = 3500 * time.Millisecond
+			}
+
+			client, err = sshclient.ConnectWithAuth(ctx, dev.Address, dev.Port, devAuth, directOpts)
+			if err != nil {
+				if pool != nil {
+					pool.markBadBastion(dev.Address)
+				}
+
+				// 4. Auto-fallback to neighbor device
+				if cfg.JumpEnabled && pool != nil && len(cfg.AutoFallbackDevices) > 0 && ctx.Err() == nil {
+					targetIP := net.ParseIP(dev.Address)
+					for _, cand := range cfg.AutoFallbackDevices {
+						if cand.Address == dev.Address || cand.Hostname == dev.Hostname || pool.isBadBastion(cand.Address) {
+							continue
+						}
+						candIP := net.ParseIP(cand.Address)
+						sameSubnet := targetIP != nil && candIP != nil && targetIP.To4() != nil && candIP.To4() != nil &&
+							targetIP.To4()[0] == candIP.To4()[0] && targetIP.To4()[1] == candIP.To4()[1] && targetIP.To4()[2] == candIP.To4()[2]
+
+						if !sameSubnet && len(cfg.AutoFallbackDevices) > 5 {
+							continue
+						}
+
+						candEndpoint := cand.Endpoint()
+						candCreds := cfg.creds(cand.CredentialGroup)
+						candAuth := sshclient.AuthOptions{
+							Username: candCreds.Username,
+							Password: candCreds.Password,
+							KeyFile:  candCreds.KeyFile,
+						}
+						jumpOpts := cfg.SSH
+						if jumpOpts.ConnectTimeout > 2500*time.Millisecond {
+							jumpOpts.ConnectTimeout = 2500 * time.Millisecond
+						}
+						jumpClient, jErr := pool.get(ctx, candEndpoint, candAuth)
+						if jErr != nil {
+							continue
+						}
+						cl, cErr := sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, cfg.SSH)
+						if cErr == nil {
+							client = cl
+							if pool.memStore != nil {
+								_ = pool.memStore.Record(dev.Hostname, dev.Address, cand.Hostname, candEndpoint, "auto-fallback")
+							}
+							err = nil
+							break
+						}
+					}
+				}
+
+				if err != nil {
+					return "", errcat.Classify(dev.Hostname, "connect", err)
+				}
+			}
+		}
 	}
 	if err != nil {
 		return "", errcat.Classify(dev.Hostname, "connect", err)

@@ -17,6 +17,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -143,4 +144,13 @@ func parseLine(fields []string, lineNo int) (Device, error) {
 	}
 
 	return dev, nil
+}
+
+// Endpoint returns the host:port string for this device.
+func (d Device) Endpoint() string {
+	p := d.Port
+	if p <= 0 {
+		p = 22
+	}
+	return net.JoinHostPort(d.Address, strconv.Itoa(p))
 }

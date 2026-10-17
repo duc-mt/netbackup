@@ -15,6 +15,7 @@ import (
 
 	"netbackup/internal/backup"
 	"netbackup/internal/logging"
+	"netbackup/internal/memory"
 	"netbackup/internal/report"
 )
 
@@ -256,5 +257,20 @@ func TestCLIOptionsDefaults(t *testing.T) {
 	opts := parseFlags()
 	if opts.retries < 0 {
 		t.Errorf("retries should default to >= 0, got %d", opts.retries)
+	}
+}
+
+func TestRouteMemoryIntegration(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "mem.json")
+	s, err := memory.Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if err := s.Record("vyos1", "10.0.0.1", "jump1", "10.0.0.254:22", "auto-fallback"); err != nil {
+		t.Fatalf("Record failed: %v", err)
+	}
+	rec, ok := s.Get("10.0.0.1")
+	if !ok || rec.JumpHost != "jump1" {
+		t.Fatalf("expected jump1, got %+v", rec)
 	}
 }

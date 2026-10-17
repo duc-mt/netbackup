@@ -35,6 +35,7 @@ import (
 	"netbackup/internal/credentials"
 	"netbackup/internal/inventory"
 	"netbackup/internal/logging"
+	"netbackup/internal/memory"
 	"netbackup/internal/report"
 	"netbackup/internal/sshclient"
 )
@@ -80,6 +81,13 @@ type cliOptions struct {
 	jumpUser     string // bastion SSH username (overrides NETBACKUP_JUMP_USERNAME)
 	jumpPassword string // bastion SSH password (overrides NETBACKUP_JUMP_PASSWORD)
 	jumpKeyFile  string // bastion SSH private key file (overrides NETBACKUP_JUMP_KEY_FILE)
+
+	// TCP MSS & Route memory
+	tcpMSS        int
+	memoryEnabled bool
+	memoryFile    string
+	showMemory    bool
+	clearMemory   bool
 }
 
 func parseFlags() cliOptions {
@@ -121,6 +129,13 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.jumpPassword, "jump-password", "", "SSH password for the global jump host (overrides NETBACKUP_JUMP_PASSWORD)")
 	flag.StringVar(&opts.jumpKeyFile, "jump-key-file", "", "SSH private key file for the global jump host (overrides NETBACKUP_JUMP_KEY_FILE)")
 
+	// TCP MSS & Route memory
+	flag.IntVar(&opts.tcpMSS, "tcp-mss", 1360, "TCP Maximum Segment Size for outgoing SSH sockets (0=OS default, >0=clamp MSS to avoid PMTU issues)")
+	flag.BoolVar(&opts.memoryEnabled, "memory", true, "enable automatic memory of learned routing and fallback paths across runs")
+	flag.StringVar(&opts.memoryFile, "memory-file", memory.DefaultFile, "persistent memory file for learned device routes")
+	flag.BoolVar(&opts.showMemory, "show-memory", false, "display learned route memory and exit")
+	flag.BoolVar(&opts.clearMemory, "clear-memory", false, "clear learned route memory and exit")
+
 	flag.Parse()
 	return opts
 }
@@ -130,6 +145,38 @@ func parseFlags() cliOptions {
 // out of the main control flow.
 func run() int {
 	opts := parseFlags()
+
+	if opts.showMemory {
+		mem, err := memory.Load(opts.memoryFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fatal: load memory: %v\n", err)
+			return 1
+		}
+		routes := mem.List()
+		if len(routes) == 0 {
+			fmt.Println("No learned routes in memory.")
+			return 0
+		}
+		fmt.Printf("%-20s %-18s %-20s %-20s %-8s %s\n", "TARGET HOST", "TARGET IP", "JUMP HOST", "JUMP ENDPOINT", "SUCCESS", "LAST USED")
+		for _, r := range routes {
+			fmt.Printf("%-20s %-18s %-20s %-20s %-8d %s\n",
+				r.TargetHost, r.TargetIP, r.JumpHost, r.JumpEndpoint, r.SuccessCount, r.LastUsedAt.Format("2006-01-02 15:04:05"))
+		}
+		return 0
+	}
+	if opts.clearMemory {
+		mem, err := memory.Load(opts.memoryFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fatal: load memory: %v\n", err)
+			return 1
+		}
+		if err := mem.Clear(); err != nil {
+			fmt.Fprintf(os.Stderr, "fatal: clear memory: %v\n", err)
+			return 1
+		}
+		fmt.Printf("Route memory cleared (%s).\n", opts.memoryFile)
+		return 0
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -194,25 +241,39 @@ func run() int {
 		}
 	}
 
+	var memStore *memory.Store
+	if opts.memoryEnabled {
+		var err error
+		memStore, err = memory.Load(opts.memoryFile)
+		if err != nil {
+			logger.Warn("failed to load route memory %s: %v", opts.memoryFile, err)
+		} else if len(memStore.List()) > 0 {
+			logger.Info("loaded %d learned route(s) from persistent memory (%s)", len(memStore.List()), opts.memoryFile)
+		}
+	}
+
 	cfg := backup.Config{
-		CredStore:       credStore,
-		OutputDir:       opts.outputDir,
-		RunName:         backup.DefaultRunName(time.Now()),
-		IgnoreVolatile:  opts.ignoreVolatile,
-		Concurrency:     opts.concurrency,
-		Redact:          opts.redactSecrets,
-		RetentionCount:  opts.retentionCount,
-		RetentionDays:   opts.retentionDays,
-		SaveUnchanged:   opts.saveUnchanged,
-		Retries:         opts.retries,
-		RetryDelay:      opts.retryDelay,
-		ShowDiff:        opts.showDiff,
-		JumpEnabled:     opts.jumpEnabled,
-		JumpDefaultHost: opts.jumpHost,
+		CredStore:           credStore,
+		OutputDir:           opts.outputDir,
+		RunName:             backup.DefaultRunName(time.Now()),
+		IgnoreVolatile:      opts.ignoreVolatile,
+		Concurrency:         opts.concurrency,
+		Redact:              opts.redactSecrets,
+		RetentionCount:      opts.retentionCount,
+		RetentionDays:       opts.retentionDays,
+		SaveUnchanged:       opts.saveUnchanged,
+		Retries:             opts.retries,
+		RetryDelay:          opts.retryDelay,
+		ShowDiff:            opts.showDiff,
+		JumpEnabled:         opts.jumpEnabled,
+		JumpDefaultHost:     opts.jumpHost,
+		MemStore:            memStore,
+		AutoFallbackDevices: devices,
 		SSH: sshclient.Options{
 			ConnectTimeout:  opts.connectTimeout,
 			CommandTimeout:  opts.commandTimeout,
 			HostKeyCallback: hostKeyCallback,
+			TCPMSS:          opts.tcpMSS,
 		},
 	}
 
