@@ -33,7 +33,7 @@ Quickly view or locate the latest configuration backup or diff for any node:
 ### Option 2: Download from GitHub Releases
 All builds are automatically compiled and published to GitHub on every commit:
 1. Go to the [Releases](https://github.com/duc-mt/netbackup/releases) page on GitHub.
-2. Under **Latest Automatic Build**, download the single binary for your target OS (`.exe` for Windows, `linux-amd64` for Linux).
+2. Under **Latest Build**, download the single binary for your target OS (`.exe` for Windows, `linux-amd64` for Linux).
 3. Bring only this binary to the target machine.
 4. Run `netbackup.exe -init` (or `./netbackup-linux-amd64 -init`) to generate sample `inventory.csv` and `.env` template files instantly!
 
