@@ -21,6 +21,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
 	"os"
@@ -39,6 +40,12 @@ import (
 	"netbackup/internal/report"
 	"netbackup/internal/sshclient"
 )
+
+//go:embed samples/inventory.csv
+var sampleInventory []byte
+
+//go:embed samples/env.example
+var sampleEnv []byte
 
 func main() {
 	os.Exit(run())
@@ -88,10 +95,14 @@ type cliOptions struct {
 	memoryFile    string
 	showMemory    bool
 	clearMemory   bool
+
+	// Init sample templates
+	initConfig bool
 }
 
 func parseFlags() cliOptions {
 	var opts cliOptions
+	flag.BoolVar(&opts.initConfig, "init", false, "generate sample inventory.csv and .env template in current directory and exit")
 	flag.StringVar(&opts.inventoryPath, "inventory", "inventory.csv", "path to the device inventory CSV file")
 	flag.StringVar(&opts.outputDir, "out", "backups", "directory to write backup files into")
 	flag.StringVar(&opts.logDir, "log-dir", "logs", "directory to write run logs into")
@@ -146,6 +157,36 @@ func parseFlags() cliOptions {
 func run() int {
 	opts := parseFlags()
 
+	if opts.initConfig {
+		created := 0
+		if _, err := os.Stat("inventory.csv"); os.IsNotExist(err) {
+			if err := os.WriteFile("inventory.csv", sampleInventory, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "error creating inventory.csv: %v\n", err)
+				return 1
+			}
+			fmt.Println("[+] Created sample inventory.csv")
+			created++
+		} else {
+			fmt.Println("[.] inventory.csv already exists, skipping")
+		}
+
+		if _, err := os.Stat(".env"); os.IsNotExist(err) {
+			if err := os.WriteFile(".env", sampleEnv, 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "error creating .env: %v\n", err)
+				return 1
+			}
+			fmt.Println("[+] Created sample .env template")
+			created++
+		} else {
+			fmt.Println("[.] .env already exists, skipping")
+		}
+
+		if created > 0 {
+			fmt.Println("\nSample configuration created! Edit inventory.csv and .env with your devices and credentials.")
+		}
+		return 0
+	}
+
 	if opts.showMemory {
 		mem, err := memory.Load(opts.memoryFile)
 		if err != nil {
@@ -194,6 +235,9 @@ func run() int {
 	}
 	if len(devices) == 0 {
 		logger.Error("no usable devices found in %q -- nothing to do", opts.inventoryPath)
+		if _, err := os.Stat(opts.inventoryPath); os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "\nTip: Run '%s -init' to create sample inventory.csv and .env templates.\n\n", os.Args[0])
+		}
 		return 1
 	}
 	logger.Info("loaded %d device(s) from %s", len(devices), opts.inventoryPath)

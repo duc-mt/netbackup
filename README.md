@@ -30,35 +30,31 @@ Quickly view or locate the latest configuration backup or diff for any node:
 ./show-backup -l              # List all available nodes with backups
 ```
 
-### Option 2: Docker / Docker Compose
-If you prefer running in a container:
-
-```bash
-docker compose up  # Builds container (if needed) and executes backup
-```
+### Option 2: Download from GitHub Releases
+All builds are automatically compiled and published to GitHub on every commit:
+1. Go to the [Releases](https://github.com/duc-mt/netbackup/releases) page on GitHub.
+2. Under **Latest Automatic Build**, download the single binary for your target OS (`.exe` for Windows, `linux-amd64` for Linux).
+3. Bring only this binary to the target machine.
+4. Run `netbackup.exe -init` (or `./netbackup-linux-amd64 -init`) to generate sample `inventory.csv` and `.env` template files instantly!
 
 ### Option 3: Standard Make / Direct Binary
 - **Initialize config:** `make init`
-- **Build (offline):** `make build`
-- **Run direct binary:** `./bin/netbackup-linux-amd64` (or matching OS in `bin/`)
+- **Build (offline):** `make build` (or `make cross` for all platforms)
+- **Run direct binary:** `./bin/netbackup`
 
-## Fastest path: just run the binary
+## Fastest path: just download and run the binary
 
-`bin/` already contains ready-to-run, statically linked binaries. No Go
-toolchain, no install step, no internet, on any OS:
+Download the matching single file from [GitHub Releases](https://github.com/duc-mt/netbackup/releases):
 
 | File | Platform |
 |---|---|
-| `bin/netbackup-linux-amd64` | Linux, x86-64 (most servers/jump hosts) |
-| `bin/netbackup-linux-arm64` | Linux, ARM64 |
-| `bin/netbackup-windows-amd64.exe` | Windows, x86-64 |
-| `bin/netbackup-darwin-amd64` | macOS, Intel |
-| `bin/netbackup-darwin-arm64` | macOS, Apple Silicon |
+| `netbackup-linux-amd64` | Linux, x86-64 (most servers/jump hosts) |
+| `netbackup-linux-arm64` | Linux, ARM64 |
+| `netbackup-windows-amd64.exe` | Windows, x86-64 |
+| `netbackup-darwin-amd64` | macOS, Intel |
+| `netbackup-darwin-arm64` | macOS, Apple Silicon |
 
-Copy the one matching file, plus `inventory.csv` and `.env`, onto the
-air-gapped machine and run it (see "Run" below). That's the entire
-deployment. You only need the "Build" section if you change the source
-or need a platform not listed above.
+Copy the single executable onto any machine (online or air-gapped). Run `netbackup -init` to generate template configuration files, customize them, and run. That's the entire deployment. You only need to build if you are modifying source code locally.
 
 ## Key Features
 
