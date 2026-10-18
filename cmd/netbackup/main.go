@@ -160,7 +160,7 @@ func run() int {
 	if opts.initConfig {
 		created := 0
 		if _, err := os.Stat("inventory.csv"); os.IsNotExist(err) {
-			if err := os.WriteFile("inventory.csv", sampleInventory, 0644); err != nil {
+			if err := os.WriteFile("inventory.csv", sampleInventory, 0600); err != nil {
 				fmt.Fprintf(os.Stderr, "error creating inventory.csv: %v\n", err)
 				return 1
 			}
@@ -245,6 +245,9 @@ func run() int {
 	// Inject CLI credential flags into the environment before NewStore reads them,
 	// so credential resolution stays in one place (the credentials package).
 	if opts.keyFile != "" {
+		if warn := sshclient.CheckKeyPermissions(opts.keyFile); warn != "" {
+			logger.Warn("security: %s", warn)
+		}
 		os.Setenv(credentials.EnvKeyFile, opts.keyFile)
 	}
 	if opts.jumpUser != "" {
@@ -254,10 +257,17 @@ func run() int {
 		os.Setenv(credentials.EnvJumpPassword, opts.jumpPassword)
 	}
 	if opts.jumpKeyFile != "" {
+		if warn := sshclient.CheckKeyPermissions(opts.jumpKeyFile); warn != "" {
+			logger.Warn("security: %s", warn)
+		}
 		os.Setenv(credentials.EnvJumpKeyFile, opts.jumpKeyFile)
 	}
 	if opts.jumpHost != "" {
 		os.Setenv(credentials.EnvJumpHost, opts.jumpHost)
+	}
+
+	if warn := credentials.CheckFilePermissions(opts.envFile); warn != "" {
+		logger.Warn("security: %s", warn)
 	}
 
 	credStore, err := credentials.NewStore(opts.envFile)
@@ -275,7 +285,7 @@ func run() int {
 	var hostKeyCallback ssh.HostKeyCallback
 	if opts.insecureIgnoreHostKey {
 		logger.Warn("host key verification disabled via -insecure-ignore-host-key -- connections are vulnerable to MITM")
-		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+		hostKeyCallback = ssh.InsecureIgnoreHostKey() //nolint:gosec // G106: explicit opt-in via CLI flag
 	} else {
 		policy := sshclient.KnownHostsPolicy(opts.knownHostsPolicy)
 		hostKeyCallback, err = sshclient.KnownHostsCallback(opts.knownHostsPath, policy)

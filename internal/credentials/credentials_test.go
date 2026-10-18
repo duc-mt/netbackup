@@ -151,3 +151,30 @@ func TestFirstNonEmpty(t *testing.T) {
 		t.Errorf("expected empty string, got %q", got)
 	}
 }
+
+func TestCheckFilePermissions(t *testing.T) {
+	dir := t.TempDir()
+
+	// Safe file: 0600
+	safeFile := filepath.Join(dir, "safe.env")
+	if err := os.WriteFile(safeFile, []byte("NETBACKUP_USERNAME=test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if warn := CheckFilePermissions(safeFile); warn != "" {
+		t.Errorf("expected no warning for 0600 file, got: %s", warn)
+	}
+
+	// Permissive file: 0644
+	looseFile := filepath.Join(dir, "loose.env")
+	if err := os.WriteFile(looseFile, []byte("NETBACKUP_USERNAME=test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if warn := CheckFilePermissions(looseFile); warn == "" {
+		t.Errorf("expected warning for 0644 file, got none")
+	}
+
+	// Non-existent file
+	if warn := CheckFilePermissions(filepath.Join(dir, "nonexistent")); warn != "" {
+		t.Errorf("expected no warning for nonexistent file, got: %s", warn)
+	}
+}

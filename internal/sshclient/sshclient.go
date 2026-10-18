@@ -276,12 +276,33 @@ func ConnectViaJumpWithAuth(ctx context.Context, jumpClient *ssh.Client, address
 	return ssh.NewClient(sshConn, chans, reqs), nil
 }
 
+// CheckKeyPermissions inspects the given private key file's permissions. On Unix-like systems,
+// it returns a warning string if group or other bits are set (permissions looser than 0600).
+// Returns "" if the file has 0600 or stricter permissions, or if stat fails.
+func CheckKeyPermissions(path string) string {
+	if path == "" {
+		return ""
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	perm := fi.Mode().Perm()
+	if perm&0o077 != 0 {
+		return fmt.Sprintf("private key file %q has overly permissive permissions %#o (recommend 0600 or stricter)", path, perm)
+	}
+	return ""
+}
+
 // buildClientConfig is a shared helper so Connect, ConnectJumpHost, and
 // ConnectViaJump all use the exact same auth methods and cipher suite.
 func buildClientConfig(auth AuthOptions, hkCb ssh.HostKeyCallback, opts Options) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
 
 	if auth.KeyFile != "" {
+		if warn := CheckKeyPermissions(auth.KeyFile); warn != "" {
+			fmt.Fprintf(os.Stderr, "WARNING: %s\n", warn)
+		}
 		keyBytes, err := os.ReadFile(auth.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("reading SSH private key %q: %w", auth.KeyFile, err)
@@ -331,7 +352,7 @@ func buildClientConfig(auth AuthOptions, hkCb ssh.HostKeyCallback, opts Options)
 			ssh.KeyAlgoRSASHA256,
 			ssh.KeyAlgoRSASHA512,
 			ssh.KeyAlgoRSA,
-			ssh.KeyAlgoDSA,
+			ssh.KeyAlgoDSA, //nolint:staticcheck // SA1019: required for legacy network appliances
 		},
 		Timeout: opts.ConnectTimeout,
 		Config: ssh.Config{
@@ -439,6 +460,7 @@ func RunInteractive(client *ssh.Client, commands []string, opts Options) (string
 		lastSize := startLen
 		lastChange := time.Now()
 
+	waitLoop:
 		for {
 			if time.Now().After(deadline) {
 				session.Close()
@@ -446,14 +468,15 @@ func RunInteractive(client *ssh.Client, commands []string, opts Options) (string
 			}
 			time.Sleep(150 * time.Millisecond)
 			size := output.Len()
-			if size != lastSize {
+			switch {
+			case size != lastSize:
 				lastSize = size
 				lastChange = time.Now()
-			} else if size > startLen && time.Since(lastChange) >= settle {
-				break // command output arrived and settled
-			} else if size == startLen && time.Since(lastChange) >= settle*2 {
+			case size > startLen && time.Since(lastChange) >= settle:
+				break waitLoop // command output arrived and settled
+			case size == startLen && time.Since(lastChange) >= settle*2:
 				// command produced no new output within quiet window (e.g. empty command or prompt wake)
-				break
+				break waitLoop
 			}
 		}
 	}

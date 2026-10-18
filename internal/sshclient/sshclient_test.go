@@ -533,3 +533,27 @@ func TestConnectJumpHostBadPassword(t *testing.T) {
 		t.Fatal("expected auth failure for bad jump host password")
 	}
 }
+
+func TestCheckKeyPermissions(t *testing.T) {
+	dir := t.TempDir()
+
+	safeKey := filepath.Join(dir, "id_ed25519_safe")
+	if err := os.WriteFile(safeKey, []byte("fake-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if warn := CheckKeyPermissions(safeKey); warn != "" {
+		t.Errorf("expected no warning for 0600 key file, got: %s", warn)
+	}
+
+	looseKey := filepath.Join(dir, "id_ed25519_loose")
+	if err := os.WriteFile(looseKey, []byte("fake-key"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if warn := CheckKeyPermissions(looseKey); warn == "" {
+		t.Errorf("expected warning for 0644 key file, got none")
+	}
+
+	if warn := CheckKeyPermissions(filepath.Join(dir, "nonexistent")); warn != "" {
+		t.Errorf("expected no warning for nonexistent file, got: %s", warn)
+	}
+}

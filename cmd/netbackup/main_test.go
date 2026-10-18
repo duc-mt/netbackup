@@ -274,3 +274,33 @@ func TestRouteMemoryIntegration(t *testing.T) {
 		t.Fatalf("expected jump1, got %+v", rec)
 	}
 }
+
+func TestSamplesAndExamplesInSync(t *testing.T) {
+	pairs := []struct {
+		sample  string
+		example string
+	}{
+		{
+			sample:  "samples/inventory.csv",
+			example: "../../examples/inventory.csv",
+		},
+		{
+			sample:  "samples/env.example",
+			example: "../../examples/env.example",
+		},
+	}
+
+	for _, p := range pairs {
+		sampleData, err := os.ReadFile(p.sample)
+		if err != nil {
+			t.Fatalf("failed to read embedded sample %s: %v", p.sample, err)
+		}
+		exampleData, err := os.ReadFile(p.example)
+		if err != nil {
+			t.Fatalf("failed to read example %s: %v", p.example, err)
+		}
+		if string(sampleData) != string(exampleData) {
+			t.Errorf("embedded sample %s and root example %s have drifted out of sync", p.sample, p.example)
+		}
+	}
+}

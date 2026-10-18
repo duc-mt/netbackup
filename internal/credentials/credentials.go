@@ -39,9 +39,27 @@ const (
 	// device credentials).
 	EnvJumpHost     = "NETBACKUP_JUMP_HOST" // host[:port], e.g. bastion.example.com:22
 	EnvJumpUsername = "NETBACKUP_JUMP_USERNAME"
-	EnvJumpPassword = "NETBACKUP_JUMP_PASSWORD"
+	EnvJumpPassword = "NETBACKUP_JUMP_PASSWORD" //nolint:gosec // G101: environment variable name, not a hardcoded credential
 	EnvJumpKeyFile  = "NETBACKUP_JUMP_KEY_FILE"
 )
+
+// CheckFilePermissions inspects the given file's permissions. On Unix-like systems,
+// it returns a warning string if group or other bits are set (permissions looser than 0600).
+// Returns "" if the file has 0600 or stricter permissions, or if stat fails.
+func CheckFilePermissions(path string) string {
+	if path == "" {
+		return ""
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	perm := fi.Mode().Perm()
+	if perm&0o077 != 0 {
+		return fmt.Sprintf("file %q has overly permissive permissions %#o (recommend 0600 or stricter)", path, perm)
+	}
+	return ""
+}
 
 // JumpCredentials holds connection details for a bastion / jump host.
 type JumpCredentials struct {
@@ -73,6 +91,9 @@ func NewStore(envFile string) (*Store, error) {
 		fileVals: make(map[string]string),
 	}
 	if envFile != "" {
+		if warn := CheckFilePermissions(envFile); warn != "" {
+			fmt.Fprintf(os.Stderr, "WARNING: %s\n", warn)
+		}
 		vals, err := parseEnvFile(envFile)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("reading env file %q: %w", envFile, err)

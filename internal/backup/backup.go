@@ -411,7 +411,7 @@ func processConfig(dev inventory.Device, profile vendor.Profile, output string, 
 
 	if result.HasDiff && len(result.DiffLines) > 0 {
 		diffPath := strings.TrimSuffix(path, profile.FileExtension) + ".diff"
-		if err := os.WriteFile(diffPath, []byte(strings.Join(result.DiffLines, "\n")+"\n"), 0o640); err == nil {
+		if err := os.WriteFile(diffPath, []byte(strings.Join(result.DiffLines, "\n")+"\n"), 0o600); err == nil {
 			result.DiffPath = diffPath
 		}
 	}
@@ -689,7 +689,7 @@ func save(dev inventory.Device, profile vendor.Profile, content string, cfg Conf
 		path = filepath.Join(vendorDir, filename)
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", fmt.Errorf("writing backup file: %w", err)
 	}
 	return path, nil
