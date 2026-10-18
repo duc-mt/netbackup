@@ -16,8 +16,11 @@ package backup
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -51,6 +54,7 @@ type Config struct {
 	SaveUnchanged  bool
 	Retries        int           // number of retry attempts per device upon failure (default: 0)
 	RetryDelay     time.Duration // pause between retries (default: 2s)
+	DialJitter     time.Duration // random jitter delay up to this value applied before connection (default: 0)
 	SSH            sshclient.Options
 
 	// JumpEnabled globally enables or disables bastion / jump host routing.
@@ -183,18 +187,20 @@ func (c *Config) creds(group string) credentials.Credentials {
 
 // Result is what came of trying to back up one device.
 type Result struct {
-	Device      inventory.Device
-	Success     bool
-	Unchanged   bool
-	DiffLines   []string
-	DiffAdded   int
-	DiffRemoved int
-	HasDiff     bool
-	Category    errcat.Category
-	Err         error
-	OutputPath  string
-	DiffPath    string
-	Duration    time.Duration
+	Device       inventory.Device
+	Success      bool
+	Unchanged    bool
+	DiffLines    []string
+	DiffAdded    int
+	DiffRemoved  int
+	HasDiff      bool
+	Category     errcat.Category
+	Err          error
+	OutputPath   string
+	DiffPath     string
+	Duration     time.Duration
+	Checksum     string // SHA-256 hash of configuration
+	BytesWritten int64  // bytes written to disk (0 if skipped or failed)
 
 	// VolatileOnly is set when the raw output differs from the previous
 	// backup but only in volatile (or whitespace-only) lines, so the device
@@ -223,6 +229,17 @@ func DefaultRunName(t time.Time) string {
 	return "backup-" + t.Format("2006-01-02-1504")
 }
 
+func calcJitter(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0
+	}
+	return time.Duration(n.Int64())
+}
+
 // RunAll backs up every device in the inventory using a bounded pool of
 // workers, so a handful of unreachable devices can't serialise the whole
 // run behind their timeouts, while a reasonable concurrency cap keeps the
@@ -248,6 +265,20 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 		go func(i int, dev inventory.Device) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			if cfg.DialJitter > 0 {
+				jitter := calcJitter(cfg.DialJitter)
+				select {
+				case <-ctx.Done():
+					results[i] = Result{
+						Device:   dev,
+						Success:  false,
+						Category: errcat.CategoryUnknown,
+						Err:      ctx.Err(),
+					}
+					return
+				case <-time.After(jitter):
+				}
+			}
 			results[i] = runOne(ctx, dev, cfg, pool)
 		}(i, dev)
 	}
@@ -349,11 +380,13 @@ func processConfig(dev inventory.Device, profile vendor.Profile, output string, 
 	// Change Detection against latest backup
 	latestPath, latestHash, found := findLatestBackup(cfg.OutputDir, dev, profile.FileExtension)
 	currHash := sha256.Sum256([]byte(output))
+	result.Checksum = hex.EncodeToString(currHash[:])
 	if found && latestHash == currHash {
 		result.Unchanged = true
 		if !cfg.SaveUnchanged {
 			result.Success = true
 			result.OutputPath = latestPath
+			result.BytesWritten = 0
 			return result
 		}
 	}
@@ -378,6 +411,7 @@ func processConfig(dev inventory.Device, profile vendor.Profile, output string, 
 				if !cfg.SaveUnchanged {
 					result.Success = true
 					result.OutputPath = latestPath
+					result.BytesWritten = 0
 					return result
 				}
 			case len(dLines) > 0:
@@ -408,10 +442,11 @@ func processConfig(dev inventory.Device, profile vendor.Profile, output string, 
 		result.Category = cerr.Category
 		return result
 	}
+	result.BytesWritten = int64(len(output))
 
 	if result.HasDiff && len(result.DiffLines) > 0 {
 		diffPath := strings.TrimSuffix(path, profile.FileExtension) + ".diff"
-		if err := os.WriteFile(diffPath, []byte(strings.Join(result.DiffLines, "\n")+"\n"), 0o600); err == nil {
+		if err := WriteFileAtomic(diffPath, []byte(strings.Join(result.DiffLines, "\n")+"\n"), 0o600); err == nil {
 			result.DiffPath = diffPath
 		}
 	}
@@ -676,7 +711,7 @@ func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profi
 // save writes the captured config to <outputDir>/<runName>/<vendor>/<hostname><ext>.
 func save(dev inventory.Device, profile vendor.Profile, content string, cfg Config) (string, error) {
 	vendorDir := filepath.Join(cfg.OutputDir, cfg.RunName, dev.Vendor)
-	if err := os.MkdirAll(vendorDir, 0o750); err != nil {
+	if err := os.MkdirAll(vendorDir, 0o700); err != nil {
 		return "", fmt.Errorf("creating vendor dir: %w", err)
 	}
 
@@ -689,7 +724,7 @@ func save(dev inventory.Device, profile vendor.Profile, content string, cfg Conf
 		path = filepath.Join(vendorDir, filename)
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := WriteFileAtomic(path, []byte(content), 0o600); err != nil {
 		return "", fmt.Errorf("writing backup file: %w", err)
 	}
 	return path, nil

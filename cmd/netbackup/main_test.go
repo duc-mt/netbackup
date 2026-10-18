@@ -197,6 +197,38 @@ func TestWriteReportsWritesBothFilesWithPlaceholders(t *testing.T) {
 	}
 }
 
+func TestWriteReportsWritesJSONAndCSVReports(t *testing.T) {
+	logger, dir := newCLITestLogger(t)
+	out := t.TempDir()
+
+	opts := cliOptions{
+		jsonReport: filepath.Join(out, "{run}", "audit.json"),
+		csvReport:  filepath.Join(out, "{run}", "audit.csv"),
+	}
+	writeReports(logger, opts, "backup-test-audit", sampleRows())
+
+	jsonBytes, err := os.ReadFile(filepath.Join(out, "backup-test-audit", "audit.json"))
+	if err != nil {
+		t.Fatalf("JSON audit report not written: %v", err)
+	}
+	if !strings.Contains(string(jsonBytes), "sw1") || !strings.Contains(string(jsonBytes), "backup-test-audit") {
+		t.Error("JSON report content is incomplete")
+	}
+
+	csvBytes, err := os.ReadFile(filepath.Join(out, "backup-test-audit", "audit.csv"))
+	if err != nil {
+		t.Fatalf("CSV audit report not written: %v", err)
+	}
+	if !strings.Contains(string(csvBytes), "hostname,ip_address") || !strings.Contains(string(csvBytes), "sw1") {
+		t.Error("CSV report content is incomplete")
+	}
+
+	text := logText(t, dir)
+	if !strings.Contains(text, "JSON report written to") || !strings.Contains(text, "CSV report written to") {
+		t.Errorf("expected both JSON and CSV reports to be announced in log:\n%s", text)
+	}
+}
+
 func TestWriteReportsWithoutFlagsDoesNothing(t *testing.T) {
 	logger, dir := newCLITestLogger(t)
 	writeReports(logger, cliOptions{}, "backup-test-run", sampleRows())

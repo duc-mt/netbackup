@@ -77,6 +77,11 @@ type cliOptions struct {
 	complianceRules  string // single rules file with [vendor] sections
 	htmlReport       string // path of the HTML run report ("" = none)
 	mdReport         string // path of the Markdown changelog ("" = none)
+	jsonReport       string // path of the machine-readable JSON run report ("" = none)
+	csvReport        string // path of the machine-readable CSV run report ("" = none)
+
+	legacyAlgorithms bool          // allow negotiation with legacy SSH algorithms (3des-cbc, diffie-hellman-group1-sha1, ssh-dss)
+	dialJitter       time.Duration // randomized connection jitter delay up to this duration (default: 100ms)
 
 	keyFile    string        // path to SSH private key file (overrides NETBACKUP_KEY_FILE)
 	retries    int           // number of retry attempts per device
@@ -111,6 +116,7 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.keyFile, "key-file", "", "path to an SSH private key file for device authentication (overrides NETBACKUP_KEY_FILE)")
 	flag.IntVar(&opts.retries, "retries", 0, "number of retry attempts per device upon failure (default: 0)")
 	flag.DurationVar(&opts.retryDelay, "retry-delay", 2*time.Second, "delay between retries per device (default: 2s)")
+	flag.DurationVar(&opts.dialJitter, "dial-jitter", 100*time.Millisecond, "random dial jitter delay up to this value applied before connection (0 to disable)")
 	flag.IntVar(&opts.concurrency, "concurrency", 5, "maximum number of devices to back up in parallel")
 	flag.DurationVar(&opts.connectTimeout, "connect-timeout", 10*time.Second, "TCP connect + SSH handshake timeout per device")
 	flag.DurationVar(&opts.commandTimeout, "command-timeout", 30*time.Second, "time budget for running the backup command per device")
@@ -121,6 +127,7 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.knownHostsPath, "known-hosts", "known_hosts", "path to an OpenSSH known_hosts file used to verify device host keys")
 	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for unknown host keys: 'strict' or 'accept-new'")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
+	flag.BoolVar(&opts.legacyAlgorithms, "legacy-algorithms", false, "allow negotiation of legacy SSH algorithms (3des-cbc, diffie-hellman-group1-sha1, ssh-dss) for older network gear")
 	flag.BoolVar(&opts.resultTable, "result-table", true, "print a colorized per-device result table to stdout after the run")
 	flag.BoolVar(&opts.showDiff, "diff", true, "display colorized diff against previous backup when configuration changes")
 	flag.BoolVar(&opts.showDiff, "show-diff", true, "alias for -diff")
@@ -132,6 +139,8 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.complianceRules, "compliance-rules", "", "single compliance rules file with optional [vendor] sections; can be combined with -golden-dir")
 	flag.StringVar(&opts.htmlReport, "html-report", "", "write a standalone HTML run report to this path ({run}, {timestamp} and {date} are expanded)")
 	flag.StringVar(&opts.mdReport, "md-report", "", "write/update a Markdown changelog at this path, newest run first ({run}, {timestamp} and {date} are expanded)")
+	flag.StringVar(&opts.jsonReport, "json-report", "", "write a machine-readable JSON run report to this path ({run}, {timestamp} and {date} are expanded)")
+	flag.StringVar(&opts.csvReport, "csv-report", "", "write a machine-readable CSV run report to this path ({run}, {timestamp} and {date} are expanded)")
 
 	// Jump host / bastion
 	flag.BoolVar(&opts.jumpEnabled, "jump", true, "enable jump host / bastion routing (set false to connect all devices directly, overriding inventory and env config)")
@@ -318,16 +327,18 @@ func run() int {
 		SaveUnchanged:       opts.saveUnchanged,
 		Retries:             opts.retries,
 		RetryDelay:          opts.retryDelay,
+		DialJitter:          opts.dialJitter,
 		ShowDiff:            opts.showDiff,
 		JumpEnabled:         opts.jumpEnabled,
 		JumpDefaultHost:     opts.jumpHost,
 		MemStore:            memStore,
 		AutoFallbackDevices: devices,
 		SSH: sshclient.Options{
-			ConnectTimeout:  opts.connectTimeout,
-			CommandTimeout:  opts.commandTimeout,
-			HostKeyCallback: hostKeyCallback,
-			TCPMSS:          opts.tcpMSS,
+			ConnectTimeout:   opts.connectTimeout,
+			CommandTimeout:   opts.commandTimeout,
+			HostKeyCallback:  hostKeyCallback,
+			TCPMSS:           opts.tcpMSS,
+			LegacyAlgorithms: opts.legacyAlgorithms,
 		},
 	}
 
@@ -429,6 +440,20 @@ func writeReports(logger *logging.Logger, opts cliOptions, runName string, rows 
 		path := report.ExpandPath(opts.mdReport, info)
 		emitReport(logger, "Markdown", path, func() ([]string, error) {
 			return report.WriteMarkdown(path, info, rows)
+		})
+	}
+	if opts.jsonReport != "" {
+		path := report.ExpandPath(opts.jsonReport, info)
+		emitReport(logger, "JSON", path, func() ([]string, error) {
+			records := report.FromResultsToAudit(rows)
+			return report.WriteJSON(path, info, records)
+		})
+	}
+	if opts.csvReport != "" {
+		path := report.ExpandPath(opts.csvReport, info)
+		emitReport(logger, "CSV", path, func() ([]string, error) {
+			records := report.FromResultsToAudit(rows)
+			return report.WriteCSV(path, info, records)
 		})
 	}
 }

@@ -21,12 +21,19 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+)
+
+var (
+	pagerPromptRe = regexp.MustCompile(`(?i)(?:--\s*More(?:\s*\(\d+%\))?\s*--|---\(more(?:\s+\d+%)?\)---|\[More\]|Press any key to continue|<--- More --->)\s*$`)
+	pagerMarkerRe = regexp.MustCompile(`(?i)(?:--\s*More(?:\s*\(\d+%\))?\s*--|---\(more(?:\s+\d+%)?\)---|\[More\]|Press any key to continue|<--- More --->)`)
 )
 
 type safeBuffer struct {
@@ -73,6 +80,11 @@ type Options struct {
 	// TCPMSS clamps the TCP Maximum Segment Size on outgoing sockets.
 	// 0 = default (1360), <0 = disabled (OS default).
 	TCPMSS int
+
+	// LegacyAlgorithms, when true, enables older ciphers (e.g. 3des-cbc, aes128-cbc),
+	// key exchanges (e.g. diffie-hellman-group1-sha1, diffie-hellman-group14-sha1),
+	// and legacy host keys (ssh-dss) for compatibility with older network hardware.
+	LegacyAlgorithms bool
 }
 
 // ErrNoHostKeyCallback is returned by Connect when opts.HostKeyCallback is
@@ -340,42 +352,64 @@ func buildClientConfig(auth AuthOptions, hkCb ssh.HostKeyCallback, opts Options)
 		return nil, errors.New("no SSH authentication methods provided (specify password or key file)")
 	}
 
+	modernHostKeys := []string{
+		ssh.KeyAlgoED25519,
+		ssh.KeyAlgoECDSA256,
+		ssh.KeyAlgoECDSA384,
+		ssh.KeyAlgoECDSA521,
+		ssh.KeyAlgoRSASHA256,
+		ssh.KeyAlgoRSASHA512,
+		ssh.KeyAlgoRSA,
+	}
+	legacyHostKeys := []string{
+		ssh.KeyAlgoDSA, //nolint:staticcheck // SA1019: required for legacy network appliances
+	}
+
+	modernCiphers := []string{
+		"aes128-gcm@openssh.com",
+		"aes256-gcm@openssh.com",
+		"chacha20-poly1305@openssh.com",
+		"aes128-ctr",
+		"aes192-ctr",
+		"aes256-ctr",
+	}
+	legacyCiphers := []string{
+		"aes128-cbc",
+		"3des-cbc",
+	}
+
+	modernKex := []string{
+		"curve25519-sha256",
+		"curve25519-sha256@libssh.org",
+		"ecdh-sha2-nistp256",
+		"ecdh-sha2-nistp384",
+		"ecdh-sha2-nistp521",
+		"diffie-hellman-group14-sha256",
+	}
+	legacyKex := []string{
+		"diffie-hellman-group14-sha1",
+		"diffie-hellman-group1-sha1",
+	}
+
+	hostKeys := modernHostKeys
+	ciphers := modernCiphers
+	kex := modernKex
+
+	if opts.LegacyAlgorithms {
+		hostKeys = append(slices.Clone(modernHostKeys), legacyHostKeys...)
+		ciphers = append(slices.Clone(modernCiphers), legacyCiphers...)
+		kex = append(slices.Clone(modernKex), legacyKex...)
+	}
+
 	return &ssh.ClientConfig{
-		User:            auth.Username,
-		Auth:            authMethods,
-		HostKeyCallback: hkCb,
-		HostKeyAlgorithms: []string{
-			ssh.KeyAlgoED25519,
-			ssh.KeyAlgoECDSA256,
-			ssh.KeyAlgoECDSA384,
-			ssh.KeyAlgoECDSA521,
-			ssh.KeyAlgoRSASHA256,
-			ssh.KeyAlgoRSASHA512,
-			ssh.KeyAlgoRSA,
-			ssh.KeyAlgoDSA, //nolint:staticcheck // SA1019: required for legacy network appliances
-		},
-		Timeout: opts.ConnectTimeout,
+		User:              auth.Username,
+		Auth:              authMethods,
+		HostKeyCallback:   hkCb,
+		HostKeyAlgorithms: hostKeys,
+		Timeout:           opts.ConnectTimeout,
 		Config: ssh.Config{
-			Ciphers: []string{
-				"aes128-gcm@openssh.com",
-				"aes256-gcm@openssh.com",
-				"chacha20-poly1305@openssh.com",
-				"aes128-ctr",
-				"aes192-ctr",
-				"aes256-ctr",
-				"aes128-cbc",
-				"3des-cbc",
-			},
-			KeyExchanges: []string{
-				"curve25519-sha256",
-				"curve25519-sha256@libssh.org",
-				"ecdh-sha2-nistp256",
-				"ecdh-sha2-nistp384",
-				"ecdh-sha2-nistp521",
-				"diffie-hellman-group14-sha256",
-				"diffie-hellman-group14-sha1",
-				"diffie-hellman-group1-sha1",
-			},
+			Ciphers:      ciphers,
+			KeyExchanges: kex,
 		},
 	}, nil
 }
@@ -472,14 +506,31 @@ func RunInteractive(client *ssh.Client, commands []string, opts Options) (string
 			case size != lastSize:
 				lastSize = size
 				lastChange = time.Now()
-			case size > startLen && time.Since(lastChange) >= settle:
-				break waitLoop // command output arrived and settled
-			case size == startLen && time.Since(lastChange) >= settle*2:
-				// command produced no new output within quiet window (e.g. empty command or prompt wake)
-				break waitLoop
+			default:
+				// Detect and answer interactive paging markers (--More--, ---(more)---, etc.)
+				str := output.String()
+				tail := str
+				if len(tail) > 256 {
+					tail = tail[len(tail)-256:]
+				}
+				if pagerPromptRe.MatchString(tail) {
+					if _, err := stdin.Write([]byte(" ")); err == nil {
+						lastChange = time.Now()
+						time.Sleep(100 * time.Millisecond)
+						continue
+					}
+				}
+
+				if size > startLen && time.Since(lastChange) >= settle {
+					break waitLoop // command output arrived and settled
+				} else if size == startLen && time.Since(lastChange) >= settle*2 {
+					// command produced no new output within quiet window (e.g. empty command or prompt wake)
+					break waitLoop
+				}
 			}
 		}
 	}
 
-	return output.String(), nil
+	cleaned := pagerMarkerRe.ReplaceAllString(output.String(), "")
+	return cleaned, nil
 }

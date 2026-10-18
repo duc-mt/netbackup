@@ -126,7 +126,7 @@ func ExpandPath(pattern string, info RunInfo) string {
 // report behind. Parent directories are created as needed.
 func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating report dir: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, ".netbackup-report-*")

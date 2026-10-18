@@ -38,6 +38,7 @@ func TestClassify(t *testing.T) {
 		{"sw01", "connect", errors.New("ssh: handshake failed: no common algorithm for host key"), CategorySessionError},
 		{"sw01", "command", errors.New("process exited with status 1"), CategoryCommandFailed},
 		{"sw01", "connect", errors.New("ssh: unexpected packet type"), CategorySessionError},
+		{"sw01", "validate", errors.New("backup appears truncated or incomplete: expected end marker not found"), CategoryTruncatedOutput},
 		{"sw01", "write", errors.New("something totally random"), CategoryUnknown},
 	}
 
@@ -45,6 +46,21 @@ func TestClassify(t *testing.T) {
 		cerr := Classify(tt.device, tt.stage, tt.err)
 		if cerr.Category != tt.expected {
 			t.Errorf("Classify(%s, %s, %v): expected category %s, got %s", tt.device, tt.stage, tt.err, tt.expected, cerr.Category)
+		}
+	}
+
+	// Verify AuditReason mappings
+	auditTests := map[Category]string{
+		CategoryAuthFailed:      "AUTH_FAILED",
+		CategoryUnreachable:     "CONNECT_FAILED",
+		CategoryConnectFailed:   "CONNECT_FAILED",
+		CategoryTimeout:         "TIMEOUT",
+		CategoryTruncatedOutput: "TRUNCATED_OUTPUT",
+		CategoryUnknown:         "FAILED",
+	}
+	for cat, expected := range auditTests {
+		if got := cat.AuditReason(); got != expected {
+			t.Errorf("cat.AuditReason() for %s: expected %s, got %s", cat, expected, got)
 		}
 	}
 }

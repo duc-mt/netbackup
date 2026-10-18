@@ -30,7 +30,7 @@ var commonPatterns = []patternRule{
 	},
 	// Cisco / IOS-XE / Ruijie / Aruba password and secret definitions
 	{
-		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:username\s+\S+(?:\s+privilege\s+\d+)?\s+)?(?:enable\s+)?(?:password|secret)(?:\s+\d+)?)\s+\S+`),
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:username\s+\S+(?:\s+privilege\s+\d+)?\s+)?(?:enable\s+)?(?:password|secret)(?:\s+(?:\d+|plaintext|hash|ciphertext))?)\s+\S+`),
 		repl: "${1} <REDACTED>",
 	},
 	// Cisco / Network SNMP community strings
@@ -45,7 +45,7 @@ var commonPatterns = []patternRule{
 	},
 	// Juniper Junos & VyOS encrypted passwords & secrets
 	{
-		re:   regexp.MustCompile(`(?i)(?m)(encrypted-password|pre-shared-secret)\s+['"]?[^'";\r\n]+['"]?`),
+		re:   regexp.MustCompile(`(?i)(?m)(encrypted-password|pre-shared-secret|authentication-key|md5)\s+['"]?[^'";\r\n]+['"]?`),
 		repl: `${1} "<REDACTED>"`,
 	},
 	// Juniper SNMP communities
@@ -53,10 +53,20 @@ var commonPatterns = []patternRule{
 		re:   regexp.MustCompile(`(?i)(?m)(community\s+)"?[^";{\s]+"?(\s*\{)`),
 		repl: `${1}"<REDACTED>"${2}`,
 	},
-	// FortiOS passwords and keys (e.g. set password ENC ..., set preshared-key ...)
+	// FortiOS passwords, pre-shared keys and psksecret (IPsec phase1)
 	{
-		re:   regexp.MustCompile(`(?i)(?m)(^\s*set\s+(?:password(?:\s+ENC)?|secret|preshared-key|pre-shared-key|private-key))\s+\S+`),
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*set\s+(?:password|secret|preshared-key|pre-shared-key|private-key|psksecret|auth-psk)(?:\s+ENC)?)\s+\S+`),
 		repl: `${1} "<REDACTED>"`,
+	},
+	// Check Point Gaia password-hash
+	{
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*set\s+user\s+\S+\s+password-hash)\s+\S+`),
+		repl: `${1} <REDACTED>`,
+	},
+	// Routing protocol authentication (BGP neighbor password, OSPF authentication/message-digest-key, ISIS password)
+	{
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*(?:neighbor\s+\S+\s+password|ip\s+ospf\s+authentication-key|ip\s+ospf\s+message-digest-key\s+\d+\s+md5|isis\s+password))\s+\S+`),
+		repl: `${1} <REDACTED>`,
 	},
 	// Huawei VRP cipher passwords / communities
 	{

@@ -28,11 +28,20 @@ crypto isakmp key mySecretKey123 address 192.168.1.1
 set system root-authentication encrypted-password "$6$rounds=10000$..."
 set snmp community "public" {
 set security ike proposal p1 pre-shared-secret "$9$..."
+set protocols bgp group PEER neighbor 10.0.0.2 authentication-key "junosBgpSecret"
 
 ! Fortinet
 set password ENC 1234567890
 set preshared-key my-ipsec-psk
+set psksecret ENC fortiPskSecret123
+set auth-psk "fortiAuthPskSecret"
 set community-name "fortiSnmpSecret"
+
+! Routing Protocols & Check Point
+neighbor 10.1.1.2 password ciscoBgpSecretPass
+ip ospf message-digest-key 1 md5 ospfMd5SecretPass
+set user admin password-hash $1$gaia$99887766554433221100
+password plaintext arubaSecretPass
 
 ! TACACS & RADIUS
 tacacs-server key 7 secretTacacsPass
@@ -63,6 +72,8 @@ MIIEowIBAAKCAQEA0Y...
 		"MIIEowIBAAKCAQEA0Y...",
 		"1234567890",
 		"my-ipsec-psk",
+		"fortiPskSecret123",
+		"fortiAuthPskSecret",
 		"fortiSnmpSecret",
 		"secretTacacsPass",
 		"radiusSecretPass",
@@ -70,6 +81,11 @@ MIIEowIBAAKCAQEA0Y...
 		"MyPrivPass456",
 		"vyosCommunityRO",
 		"$6$rounds=5000$vyosSecretHash",
+		"junosBgpSecret",
+		"ciscoBgpSecretPass",
+		"ospfMd5SecretPass",
+		"$1$gaia$99887766554433221100",
+		"arubaSecretPass",
 	}
 
 	for _, str := range forbidden {

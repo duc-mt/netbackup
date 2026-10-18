@@ -129,15 +129,23 @@ func handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 			// Read commands from stdin and respond
 			go func() {
 				buf := make([]byte, 1024)
+				paged := false
 				for {
 					n, err := channel.Read(buf)
 					if err != nil || n == 0 {
 						return
 					}
 					input := string(buf[:n])
-					if strings.Contains(input, "show") {
+					switch {
+					case strings.Contains(input, "page-test"):
+						paged = true
+						_, _ = channel.Write([]byte("hostname paged-router\n--More--"))
+					case paged && strings.Contains(input, " "):
+						paged = false
+						_, _ = channel.Write([]byte("\ninterface gig0/2\nend\n"))
+					case strings.Contains(input, "show"):
 						_, _ = channel.Write([]byte("hostname router-sw-01\ninterface GigabitEthernet0/1\n"))
-					} else {
+					default:
 						_, _ = channel.Write([]byte("ok\n"))
 					}
 				}
@@ -316,6 +324,69 @@ func TestRunInteractive(t *testing.T) {
 	}
 	if !strings.Contains(output, "router-sw-01") {
 		t.Errorf("unexpected output from RunInteractive: %q", output)
+	}
+}
+
+func TestRunInteractivePager(t *testing.T) {
+	port, cleanup := startMockSSHServer(t)
+	defer cleanup()
+
+	opts := Options{
+		ConnectTimeout:  5 * time.Second,
+		CommandTimeout:  10 * time.Second,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	client, err := Connect(context.Background(), "127.0.0.1", port, "testuser", "testpass", opts)
+	if err != nil {
+		t.Fatalf("connect failed: %v", err)
+	}
+	defer client.Close()
+
+	output, err := RunInteractive(client, []string{"page-test"}, opts)
+	if err != nil {
+		t.Fatalf("RunInteractive failed with pager: %v", err)
+	}
+	if !strings.Contains(output, "paged-router") || !strings.Contains(output, "gig0/2") {
+		t.Errorf("expected complete output across pager, got: %q", output)
+	}
+	if strings.Contains(output, "--More--") {
+		t.Errorf("expected --More-- markers to be cleaned up, got: %q", output)
+	}
+}
+
+func TestLegacyAlgorithmsOption(t *testing.T) {
+	optsModern := Options{
+		ConnectTimeout:   2 * time.Second,
+		LegacyAlgorithms: false,
+	}
+	cfgModern, err := buildClientConfig(AuthOptions{Username: "u", Password: "p"}, ssh.InsecureIgnoreHostKey(), optsModern)
+	if err != nil {
+		t.Fatalf("buildClientConfig modern failed: %v", err)
+	}
+	for _, c := range cfgModern.Config.Ciphers {
+		if c == "3des-cbc" || c == "aes128-cbc" {
+			t.Errorf("did not expect legacy cipher %s in modern config", c)
+		}
+	}
+
+	optsLegacy := Options{
+		ConnectTimeout:   2 * time.Second,
+		LegacyAlgorithms: true,
+	}
+	cfgLegacy, err := buildClientConfig(AuthOptions{Username: "u", Password: "p"}, ssh.InsecureIgnoreHostKey(), optsLegacy)
+	if err != nil {
+		t.Fatalf("buildClientConfig legacy failed: %v", err)
+	}
+	has3DES := false
+	for _, c := range cfgLegacy.Config.Ciphers {
+		if c == "3des-cbc" {
+			has3DES = true
+			break
+		}
+	}
+	if !has3DES {
+		t.Errorf("expected 3des-cbc in legacy config, ciphers: %v", cfgLegacy.Config.Ciphers)
 	}
 }
 

@@ -54,9 +54,9 @@ func TestFindLatestBackupAndPrune(t *testing.T) {
 	run2 := filepath.Join(dir, "backup-20260102-1000", dev.Vendor)
 	run3 := filepath.Join(dir, "backup-20260103-1000", dev.Vendor)
 
-	_ = os.MkdirAll(run1, 0o750)
-	_ = os.MkdirAll(run2, 0o750)
-	_ = os.MkdirAll(run3, 0o750)
+	_ = os.MkdirAll(run1, 0o700)
+	_ = os.MkdirAll(run2, 0o700)
+	_ = os.MkdirAll(run3, 0o700)
 
 	file1 := filepath.Join(run1, dev.Hostname+ext)
 	file2 := filepath.Join(run2, dev.Hostname+ext)
@@ -66,11 +66,11 @@ func TestFindLatestBackupAndPrune(t *testing.T) {
 	content2 := "config version 2"
 	content3 := "config version 3"
 
-	_ = os.WriteFile(file1, []byte(content1), 0o640)
+	_ = os.WriteFile(file1, []byte(content1), 0o600)
 	time.Sleep(10 * time.Millisecond)
-	_ = os.WriteFile(file2, []byte(content2), 0o640)
+	_ = os.WriteFile(file2, []byte(content2), 0o600)
 	time.Sleep(10 * time.Millisecond)
-	_ = os.WriteFile(file3, []byte(content3), 0o640)
+	_ = os.WriteFile(file3, []byte(content3), 0o600)
 
 	latestPath, latestHash, found := findLatestBackup(dir, dev, ext)
 	if !found {

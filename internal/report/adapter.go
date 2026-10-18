@@ -47,6 +47,10 @@ func fromResult(r backup.Result) BackupResult {
 		ComplianceChecked: r.Compliance.Checked,
 		Drifts:            r.Compliance.DriftMessages(),
 		Warnings:          r.Warnings,
+
+		Hostname: r.Device.Hostname,
+		Address:  r.Device.Address,
+		Checksum: r.Checksum,
 	}
 	if r.Risk.Level != backup.RiskNone {
 		out.Risk = r.Risk.Level.String()
@@ -98,8 +102,10 @@ func categoryLabel(c errcat.Category) string {
 	switch c {
 	case errcat.CategoryAuthFailed:
 		return StatusAuthFailed
-	case errcat.CategoryTimeout, errcat.CategoryUnreachable:
+	case errcat.CategoryTimeout, errcat.CategoryUnreachable, errcat.CategoryConnectFailed:
 		return StatusTimeout
+	case errcat.CategoryTruncatedOutput:
+		return "TRUNCATED"
 	default:
 		return StatusFailed
 	}

@@ -23,14 +23,33 @@ import (
 type Category string
 
 const (
-	CategoryUnreachable   Category = "CONNECTION_TIMEOUT_OR_UNREACHABLE"
-	CategoryAuthFailed    Category = "AUTHENTICATION_FAILED"
-	CategoryCommandFailed Category = "COMMAND_REJECTED_OR_FAILED"
-	CategoryTimeout       Category = "COMMAND_TIMEOUT"
-	CategorySessionError  Category = "SSH_SESSION_ERROR"
-	CategoryIOError       Category = "LOCAL_IO_ERROR"
-	CategoryUnknown       Category = "UNKNOWN_ERROR"
+	CategoryUnreachable     Category = "CONNECTION_TIMEOUT_OR_UNREACHABLE"
+	CategoryConnectFailed   Category = "CONNECT_FAILED"
+	CategoryAuthFailed      Category = "AUTHENTICATION_FAILED"
+	CategoryCommandFailed   Category = "COMMAND_REJECTED_OR_FAILED"
+	CategoryTimeout         Category = "COMMAND_TIMEOUT"
+	CategoryTruncatedOutput Category = "TRUNCATED_OUTPUT"
+	CategorySessionError    Category = "SSH_SESSION_ERROR"
+	CategoryIOError         Category = "LOCAL_IO_ERROR"
+	CategoryUnknown         Category = "UNKNOWN_ERROR"
 )
+
+// AuditReason maps Category to standard machine-readable audit report status
+// (AUTH_FAILED, CONNECT_FAILED, TIMEOUT, TRUNCATED_OUTPUT, or generic FAILED).
+func (c Category) AuditReason() string {
+	switch c {
+	case CategoryAuthFailed:
+		return "AUTH_FAILED"
+	case CategoryUnreachable, CategoryConnectFailed:
+		return "CONNECT_FAILED"
+	case CategoryTimeout:
+		return "TIMEOUT"
+	case CategoryTruncatedOutput:
+		return "TRUNCATED_OUTPUT"
+	default:
+		return "FAILED"
+	}
+}
 
 // Error wraps an underlying error with a Category so the caller can log,
 // count, and report on it without needing to know the plumbing details.
@@ -71,6 +90,10 @@ func Classify(device, stage string, err error) *Error {
 
 	if stage == "command" && isTimeout {
 		return New(CategoryTimeout, device, stage, err)
+	}
+
+	if stage == "validate" || strings.Contains(msg, "truncated") || strings.Contains(msg, "incomplete") {
+		return New(CategoryTruncatedOutput, device, stage, err)
 	}
 
 	switch {

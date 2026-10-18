@@ -176,9 +176,14 @@ chmod 600 .env
 | `-compliance-rules` | `""`  | Single rules file with optional `[vendor]` sections; can be combined with `-golden-dir` |
 | `-html-report`    | `""`    | Write a standalone HTML run report to this path |
 | `-md-report`      | `""`    | Write/update a Markdown changelog at this path (newest run first) |
+| `-json-report`    | `""`    | Write a machine-readable JSON run report to this path |
+| `-csv-report`     | `""`    | Write a machine-readable CSV audit summary to this path |
 | `-key-file`       | `""`    | Path to SSH private key file for device authentication (overrides `NETBACKUP_KEY_FILE`) |
 | `-retries`        | `0`     | Number of retry attempts per device upon failure (`0` = no retry) |
 | `-retry-delay`    | `2s`    | Delay between retries per device |
+| `-dial-jitter`    | `100ms` | Randomized dial jitter delay applied before connecting to avoid CPU spikes (`0` to disable) |
+| `-legacy-algorithms` | `false` | Allow negotiation of legacy SSH ciphers/kex (3des-cbc, diffie-hellman-group1-sha1, ssh-dss) |
+| `-tcp-mss`        | `1360`  | TCP Maximum Segment Size for outgoing sockets (`0` = OS default, `>0` = clamp MSS) |
 | `-jump`           | `true`  | Enable bastion/jump host routing (`-jump=false` connects directly) |
 | `-jump-host`      | `""`    | Global default bastion `host[:port]` |
 | `-jump-user`      | `""`    | SSH username for global bastion (overrides `NETBACKUP_JUMP_USERNAME`) |

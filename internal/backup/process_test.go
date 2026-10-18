@@ -38,11 +38,11 @@ func testDevice(t *testing.T, vendorName, hostname string) (inventory.Device, ve
 func seedBackup(t *testing.T, outDir, runName string, dev inventory.Device, profile vendor.Profile, content string) string {
 	t.Helper()
 	dir := filepath.Join(outDir, runName, dev.Vendor)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, sanitize(dev.Hostname)+profile.FileExtension)
-	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path

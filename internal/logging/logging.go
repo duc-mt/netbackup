@@ -60,7 +60,7 @@ type Logger struct {
 // New creates the log directory if needed and opens a timestamped log file
 // for this run, writing every line to both the file and the console.
 func New(logDir, format string) (*Logger, error) {
-	if err := os.MkdirAll(logDir, 0o750); err != nil {
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating log dir: %w", err)
 	}
 	name := fmt.Sprintf("backup_run_%s.log", time.Now().Format("20060102-150405"))

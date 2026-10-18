@@ -67,6 +67,11 @@ type BackupResult struct {
 
 	// Warnings lists non-fatal analysis problems recorded for the device.
 	Warnings []string
+
+	// Hostname, Address, and Checksum for audit and machine-readable reports.
+	Hostname string
+	Address  string
+	Checksum string
 }
 
 // Well-known status labels. Callers aren't required to use these exact
