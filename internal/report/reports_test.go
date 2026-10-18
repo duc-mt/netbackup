@@ -619,3 +619,25 @@ func TestFromResultsWithoutRiskLeavesFieldsEmpty(t *testing.T) {
 		t.Errorf("a result with no risk or compliance data must leave those fields empty: %+v", r)
 	}
 }
+
+func TestFromResultsDryRun(t *testing.T) {
+	rows := FromResults([]backup.Result{{
+		Device:   inventory.Device{Hostname: "gw1", Address: "10.0.0.2", Vendor: "vyos"},
+		Success:  true,
+		DryRun:   true,
+		Duration: 45 * time.Millisecond,
+	}})
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if r.Status != StatusDryRun {
+		t.Errorf("Status = %q, want %q", r.Status, StatusDryRun)
+	}
+	if r.FileSize != -1 {
+		t.Errorf("FileSize = %d, want -1", r.FileSize)
+	}
+	if r.Diff != "-" {
+		t.Errorf("Diff = %q, want -", r.Diff)
+	}
+}

@@ -242,6 +242,11 @@ func (l *Logger) Summary(results []backup.Result, totalRuntime ...time.Duration)
 	l.Info("---- Backup run summary ----")
 	for _, r := range results {
 		if r.Success {
+			if r.DryRun {
+				l.Info("OK      %-20s (%s) [DRY-RUN] [%s]", r.Device.Hostname, r.Device.Address, r.Duration.Round(time.Millisecond))
+				l.deviceNotes(r)
+				continue
+			}
 			status := "SAVED"
 			if r.Unchanged {
 				status = "UNCHANGED"

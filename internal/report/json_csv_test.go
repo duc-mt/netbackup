@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,5 +118,68 @@ func TestJSONAndCSVReports(t *testing.T) {
 	}
 	if rows[4][3] != "FAILED" || rows[4][7] != "TRUNCATED_OUTPUT" {
 		t.Errorf("unexpected CSV row 4: %v", rows[4])
+	}
+}
+
+func TestAuditReportDryRun(t *testing.T) {
+	tempDir := t.TempDir()
+	jsonPath := filepath.Join(tempDir, "dry_run.json")
+	csvPath := filepath.Join(tempDir, "dry_run.csv")
+
+	results := []backup.Result{
+		{
+			Device:   inventory.Device{Hostname: "core-sw01", Address: "10.0.0.1", Vendor: "cisco_ios"},
+			Success:  true,
+			DryRun:   true,
+			Duration: 120 * time.Millisecond,
+		},
+		{
+			Device:   inventory.Device{Hostname: "edge-sw01", Address: "10.0.0.2", Vendor: "arista_eos"},
+			Success:  false,
+			Category: errcat.CategoryAuthFailed,
+			Err:      errors.New("bad password"),
+			Duration: 80 * time.Millisecond,
+		},
+	}
+
+	records := FromBackupResultsToAudit(results)
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(records))
+	}
+	if records[0].Status != "DRY_RUN" {
+		t.Errorf("record 0: expected status DRY_RUN, got %s", records[0].Status)
+	}
+	if records[0].BytesWritten != 0 {
+		t.Errorf("record 0: expected BytesWritten 0, got %d", records[0].BytesWritten)
+	}
+
+	info := RunInfo{RunName: "backup-dryrun", GeneratedAt: time.Now()}
+	_, err := WriteJSON(jsonPath, info, records)
+	if err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+
+	jsonData, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("reading JSON: %v", err)
+	}
+	var auditRep AuditReport
+	if err := json.Unmarshal(jsonData, &auditRep); err != nil {
+		t.Fatalf("unmarshal JSON: %v", err)
+	}
+	if auditRep.TotalDevices != 2 || auditRep.Succeeded != 1 || auditRep.Failed != 1 {
+		t.Errorf("unexpected counts in JSON report: %+v", auditRep)
+	}
+
+	_, err = WriteCSV(csvPath, info, records)
+	if err != nil {
+		t.Fatalf("WriteCSV: %v", err)
+	}
+	csvData, err := os.ReadFile(csvPath)
+	if err != nil {
+		t.Fatalf("reading CSV: %v", err)
+	}
+	if !strings.Contains(string(csvData), "DRY_RUN") {
+		t.Errorf("expected CSV to contain DRY_RUN: %s", string(csvData))
 	}
 }

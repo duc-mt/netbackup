@@ -56,6 +56,8 @@ type Config struct {
 	RetryDelay     time.Duration // pause between retries (default: 2s)
 	DialJitter     time.Duration // random jitter delay up to this value applied before connection (default: 0)
 	SSH            sshclient.Options
+	// DryRun tests connection and authentication without executing commands or saving configs.
+	DryRun bool
 
 	// JumpEnabled globally enables or disables bastion / jump host routing.
 	// When false every device is connected directly, ignoring both the
@@ -189,6 +191,7 @@ func (c *Config) creds(group string) credentials.Credentials {
 type Result struct {
 	Device       inventory.Device
 	Success      bool
+	DryRun       bool
 	Unchanged    bool
 	DiffLines    []string
 	DiffAdded    int
@@ -323,9 +326,18 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 
 	var output string
 	for attempt := 1; attempt <= attempts; attempt++ {
-		output, err = fetchConfig(ctx, dev, profile, cfg, pool)
-		if err == nil {
-			break
+		if cfg.DryRun {
+			var client *ssh.Client
+			client, err = connectDevice(ctx, dev, cfg, pool)
+			if err == nil {
+				client.Close()
+				break
+			}
+		} else {
+			output, err = fetchConfig(ctx, dev, profile, cfg, pool)
+			if err == nil {
+				break
+			}
 		}
 
 		// If cancelled, do not retry
@@ -350,6 +362,12 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 			result.Err = err
 			result.Category = errcat.CategoryUnknown
 		}
+		return result
+	}
+
+	if cfg.DryRun {
+		result.Success = true
+		result.DryRun = true
 		return result
 	}
 
@@ -550,7 +568,10 @@ func resolveJumpAddr(dev inventory.Device, cfg Config) string {
 	return ""
 }
 
-func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profile, cfg Config, pool *jumpPool) (string, error) {
+// connectDevice handles the multi-stage connection logic (bastion jump host,
+// learned route memory, direct connection, and neighbor auto-fallback),
+// returning an authenticated *ssh.Client without running any commands.
+func connectDevice(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPool) (*ssh.Client, error) {
 	creds := cfg.creds(dev.CredentialGroup)
 	devAuth := sshclient.AuthOptions{
 		Username: creds.Username,
@@ -563,6 +584,10 @@ func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profi
 
 	jumpAddr := resolveJumpAddr(dev, cfg)
 	if jumpAddr != "" {
+		if pool == nil {
+			pool = newJumpPool(cfg.SSH, cfg.MemStore)
+			defer pool.closeAll()
+		}
 		// Resolve jump credentials: per-named-jump first, then global defaults.
 		var jumpAuth sshclient.AuthOptions
 		if dev.JumpHost != "" && cfg.CredStore != nil {
@@ -587,11 +612,11 @@ func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profi
 
 		jumpClient, err := pool.get(ctx, jumpAddr, jumpAuth)
 		if err != nil {
-			return "", errcat.Classify(dev.Hostname, "connect-jump", fmt.Errorf("bastion %s: %w", jumpAddr, err))
+			return nil, errcat.Classify(dev.Hostname, "connect-jump", fmt.Errorf("bastion %s: %w", jumpAddr, err))
 		}
 		client, err = sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, cfg.SSH)
 		if err != nil {
-			return "", errcat.Classify(dev.Hostname, "connect", err)
+			return nil, errcat.Classify(dev.Hostname, "connect", err)
 		}
 	} else {
 		// 2. Learned route memory (persisted from earlier runs)
@@ -678,13 +703,22 @@ func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profi
 				}
 
 				if err != nil {
-					return "", errcat.Classify(dev.Hostname, "connect", err)
+					return nil, errcat.Classify(dev.Hostname, "connect", err)
 				}
 			}
 		}
 	}
 	if err != nil {
-		return "", errcat.Classify(dev.Hostname, "connect", err)
+		return nil, errcat.Classify(dev.Hostname, "connect", err)
+	}
+
+	return client, nil
+}
+
+func fetchConfig(ctx context.Context, dev inventory.Device, profile vendor.Profile, cfg Config, pool *jumpPool) (string, error) {
+	client, err := connectDevice(ctx, dev, cfg, pool)
+	if err != nil {
+		return "", err
 	}
 	defer client.Close()
 

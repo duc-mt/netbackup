@@ -52,7 +52,9 @@ func FromBackupResultsToAudit(results []backup.Result) []AuditRecord {
 		var status, failureReason, errMsg string
 
 		if r.Success {
-			if r.Unchanged && r.BytesWritten == 0 {
+			if r.DryRun {
+				status = "DRY_RUN"
+			} else if r.Unchanged && r.BytesWritten == 0 {
 				status = "SKIPPED"
 			} else {
 				status = "SUCCEEDED"
@@ -90,6 +92,8 @@ func FromResultsToAudit(rows []BackupResult) []AuditRecord {
 		switch r.Status {
 		case StatusSuccess:
 			status = "SUCCEEDED"
+		case StatusDryRun:
+			status = "DRY_RUN"
 		case StatusUnchanged:
 			status = "SKIPPED"
 		default:
@@ -147,7 +151,7 @@ func WriteJSON(path string, info RunInfo, records []AuditRecord) ([]string, erro
 	for _, rec := range records {
 		totalDurationMS += rec.DurationMS
 		switch rec.Status {
-		case "SUCCEEDED":
+		case "SUCCEEDED", "DRY_RUN":
 			succeeded++
 		case "SKIPPED":
 			skipped++

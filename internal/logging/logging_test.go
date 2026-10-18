@@ -178,3 +178,38 @@ func TestDiffBlockColors(t *testing.T) {
 		t.Errorf("log file missing '-' line: %s", fileStr)
 	}
 }
+
+func TestLoggingDryRun(t *testing.T) {
+	logDir := t.TempDir()
+
+	logger, err := New(logDir, "text")
+	if err != nil {
+		t.Fatalf("failed to create logger: %v", err)
+	}
+
+	results := []backup.Result{
+		{
+			Device:   inventory.Device{Hostname: "sw-dry", Address: "10.0.0.99"},
+			Success:  true,
+			DryRun:   true,
+			Duration: 42 * time.Millisecond,
+		},
+	}
+
+	failures := logger.Summary(results)
+	if failures != 0 {
+		t.Errorf("expected 0 failures, got %d", failures)
+	}
+	logger.Close()
+
+	entries, _ := os.ReadDir(logDir)
+	content, _ := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	logStr := string(content)
+
+	if !strings.Contains(logStr, "OK      sw-dry               (10.0.0.99) [DRY-RUN]") {
+		t.Errorf("log missing expected dry-run line: %s", logStr)
+	}
+	if !strings.Contains(logStr, "Devices: 1 total, 1 succeeded, 0 failed") {
+		t.Errorf("log missing expected totals: %s", logStr)
+	}
+}

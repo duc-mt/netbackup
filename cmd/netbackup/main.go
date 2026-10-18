@@ -69,6 +69,7 @@ type cliOptions struct {
 	insecureIgnoreHostKey bool
 	resultTable           bool
 	showDiff              bool
+	dryRun                bool
 
 	// Semantic diff, compliance and reports
 	ignoreVolatile   bool   // drop volatile lines (timestamps, clock stamps) before diffing
@@ -133,6 +134,7 @@ func parseFlags() cliOptions {
 	flag.BoolVar(&opts.showDiff, "show-diff", true, "alias for -diff")
 	flag.BoolVar(&opts.showDiff, "verbose", true, "alias for -diff")
 	flag.BoolVar(&opts.showDiff, "v", true, "alias for -diff")
+	flag.BoolVar(&opts.dryRun, "dry-run", false, "test connection and authentication without pulling or saving configuration")
 	flag.BoolVar(&opts.ignoreVolatile, "ignore-volatile", true, "ignore volatile lines (\"! Last configuration change at\", \"## Last commit\", ntp clock-period, ...) when detecting changes; saved files are never modified")
 	flag.StringVar(&opts.volatilePatterns, "volatile-patterns", "", "optional file with extra volatile-line regular expressions, one per line (# starts a comment)")
 	flag.StringVar(&opts.goldenDir, "golden-dir", "", "directory of <vendor>.golden baseline files (plus optional common.golden); enables golden-config compliance checks")
@@ -250,6 +252,9 @@ func run() int {
 		return 1
 	}
 	logger.Info("loaded %d device(s) from %s", len(devices), opts.inventoryPath)
+	if opts.dryRun {
+		logger.Info("running in dry-run mode: testing connectivity and authentication only, no configuration will be pulled or saved")
+	}
 
 	// Inject CLI credential flags into the environment before NewStore reads them,
 	// so credential resolution stays in one place (the credentials package).
@@ -323,6 +328,7 @@ func run() int {
 		CredStore:           credStore,
 		OutputDir:           opts.outputDir,
 		RunName:             backup.DefaultRunName(time.Now()),
+		DryRun:              opts.dryRun,
 		IgnoreVolatile:      opts.ignoreVolatile,
 		Concurrency:         opts.concurrency,
 		Redact:              opts.redactSecrets,
@@ -356,8 +362,12 @@ func run() int {
 		}
 	}
 
-	logger.Info("starting backup run: %d device(s), concurrency=%d, redact=%t, retention-count=%d, retention-days=%d",
-		len(devices), cfg.Concurrency, cfg.Redact, cfg.RetentionCount, cfg.RetentionDays)
+	if cfg.DryRun {
+		logger.Info("starting dry-run test: %d device(s), concurrency=%d", len(devices), cfg.Concurrency)
+	} else {
+		logger.Info("starting backup run: %d device(s), concurrency=%d, redact=%t, retention-count=%d, retention-days=%d",
+			len(devices), cfg.Concurrency, cfg.Redact, cfg.RetentionCount, cfg.RetentionDays)
+	}
 
 	runStart := time.Now()
 	results := backup.RunAll(ctx, devices, cfg)

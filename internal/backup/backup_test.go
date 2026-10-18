@@ -12,12 +12,20 @@ package backup
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
+	"netbackup/internal/credentials"
+	"netbackup/internal/errcat"
 	"netbackup/internal/inventory"
 	"netbackup/internal/sshclient"
 	"netbackup/internal/vendor"
@@ -248,5 +256,167 @@ func TestRunAllWithRetries(t *testing.T) {
 	// At least 1 retry delay was observed
 	if elapsed < 10*time.Millisecond {
 		t.Errorf("expected retries to take at least 10ms, took %v", elapsed)
+	}
+}
+
+func startMockSSHServer(t *testing.T) (int, func()) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating host key: %v", err)
+	}
+
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("creating signer: %v", err)
+	}
+
+	serverConfig := &ssh.ServerConfig{
+		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			if c.User() == "admin" && string(pass) == "secret" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("password rejected")
+		},
+	}
+	serverConfig.AddHostKey(signer)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	done := make(chan struct{})
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				select {
+				case <-done:
+					return
+				default:
+					return
+				}
+			}
+
+			go func(c net.Conn) {
+				sConn, chans, reqs, err := ssh.NewServerConn(c, serverConfig)
+				if err != nil {
+					c.Close()
+					return
+				}
+				go ssh.DiscardRequests(reqs)
+				go func() {
+					for newChannel := range chans {
+						_ = newChannel.Reject(ssh.UnknownChannelType, "no channels")
+					}
+				}()
+				_ = sConn
+			}(conn)
+		}
+	}()
+
+	return port, func() {
+		close(done)
+		_ = listener.Close()
+	}
+}
+
+func TestRunAllDryRun(t *testing.T) {
+	port, cleanup := startMockSSHServer(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+
+	devices := []inventory.Device{
+		{
+			Hostname: "dev-dry-ok",
+			Address:  "127.0.0.1",
+			Port:     port,
+			Vendor:   "cisco_ios",
+		},
+		{
+			Hostname:        "dev-dry-auth-fail",
+			Address:         "127.0.0.1",
+			Port:            port,
+			Vendor:          "cisco_ios",
+			CredentialGroup: "bad",
+		},
+		{
+			Hostname: "dev-dry-unreachable",
+			Address:  "127.0.0.1",
+			Port:     65431,
+			Vendor:   "cisco_ios",
+		},
+	}
+
+	t.Setenv("NETBACKUP_USERNAME", "admin")
+	t.Setenv("NETBACKUP_PASSWORD", "secret")
+	t.Setenv("NETBACKUP_BAD_PASSWORD", "wrongpassword")
+
+	store, err := credentials.NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	cfg := Config{
+		CredStore:   store,
+		OutputDir:   dir,
+		Concurrency: 2,
+		DryRun:      true,
+		SSH: sshclient.Options{
+			ConnectTimeout:  200 * time.Millisecond,
+			CommandTimeout:  200 * time.Millisecond,
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		},
+	}
+
+	results := RunAll(context.Background(), devices, cfg)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	// Device 0: successful dry-run connection
+	r0 := results[0]
+	if !r0.Success {
+		t.Errorf("r0 expected success, got error: %v", r0.Err)
+	}
+	if !r0.DryRun {
+		t.Errorf("r0 expected DryRun=true, got false")
+	}
+	if r0.BytesWritten != 0 {
+		t.Errorf("r0 expected BytesWritten=0, got %d", r0.BytesWritten)
+	}
+	if r0.OutputPath != "" {
+		t.Errorf("r0 expected OutputPath='', got %s", r0.OutputPath)
+	}
+
+	// Verify no backup directory or files were created in OutputDir
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir OutputDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries in OutputDir for dry-run, found %d", len(entries))
+	}
+
+	// Device 1: auth failed
+	r1 := results[1]
+	if r1.Success {
+		t.Errorf("r1 expected failure, got success")
+	}
+	if r1.Category != errcat.CategoryAuthFailed {
+		t.Errorf("r1 expected CategoryAuthFailed, got %v", r1.Category)
+	}
+
+	// Device 2: unreachable port
+	r2 := results[2]
+	if r2.Success {
+		t.Errorf("r2 expected failure, got success")
+	}
+	if r2.Category == "" {
+		t.Errorf("r2 expected non-empty error category")
 	}
 }

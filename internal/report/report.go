@@ -80,6 +80,7 @@ type BackupResult struct {
 // them keeps output consistent across the codebase.
 const (
 	StatusSuccess    = "SUCCESS"
+	StatusDryRun     = "SUCCESS (dry-run)"
 	StatusUnchanged  = "UNCHANGED"
 	StatusAuthFailed = "AUTH FAILED"
 	StatusTimeout    = "TIMEOUT"

@@ -77,6 +77,7 @@ func TestColorForStatus(t *testing.T) {
 		want   string
 	}{
 		{StatusSuccess, ansiGreen},
+		{StatusDryRun, ansiGreen},
 		{StatusUnchanged, ansiGreen},
 		{StatusAuthFailed, ansiRed},
 		{StatusTimeout, ansiYellow},
@@ -270,5 +271,24 @@ func TestFormatError(t *testing.T) {
 	}
 	if !strings.HasSuffix(gotDefault, "…") {
 		t.Errorf("expected ellipsis suffix, got %q", gotDefault)
+	}
+}
+
+func TestStatusWithIcon(t *testing.T) {
+	tests := []struct {
+		status string
+		want   string
+	}{
+		{StatusSuccess, "✔ SUCCESS"},
+		{StatusDryRun, "✔ SUCCESS (dry-run)"},
+		{StatusUnchanged, "✔ UNCHANGED"},
+		{StatusTimeout, "⏱ TIMEOUT"},
+		{StatusAuthFailed, "✖ AUTH FAILED"},
+		{StatusFailed, "✖ FAILED"},
+	}
+	for _, tt := range tests {
+		if got := statusWithIcon(tt.status); got != tt.want {
+			t.Errorf("statusWithIcon(%q) = %q, want %q", tt.status, got, tt.want)
+		}
 	}
 }

@@ -290,6 +290,9 @@ func TestCLIOptionsDefaults(t *testing.T) {
 	if opts.retries < 0 {
 		t.Errorf("retries should default to >= 0, got %d", opts.retries)
 	}
+	if opts.dryRun {
+		t.Errorf("dryRun should default to false, got %v", opts.dryRun)
+	}
 }
 
 func TestRouteMemoryIntegration(t *testing.T) {

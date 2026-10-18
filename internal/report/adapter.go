@@ -85,6 +85,8 @@ func hostnameIP(r backup.Result) string {
 
 func statusFor(r backup.Result) string {
 	switch {
+	case r.DryRun && r.Success:
+		return StatusDryRun
 	case r.Success && r.Unchanged:
 		return StatusUnchanged
 	case r.Success:

@@ -153,6 +153,14 @@ chmod 600 .env
   -retention-days 30
 ```
 
+### 3. Test connectivity prior to backup (`-dry-run`)
+
+To validate SSH connectivity and authentication without executing commands or writing backups:
+
+```bash
+./bin/netbackup-linux-amd64 -inventory inventory.csv -dry-run
+```
+
 ### CLI Flags
 
 | Flag | Default | Description |
@@ -167,6 +175,7 @@ chmod 600 .env
 | `-command-timeout` | `30s` | Timeout for command execution per device |
 | `-redact` | `true` | Redact passwords, pre-shared keys, and SNMP communities |
 | `-save-unchanged` | `false` | Save new file even if configuration is identical to previous backup |
+| `-dry-run`        | `false` | Test connection and authentication without pulling or saving configuration |
 | `-retention-count`| `0` | Max backups to keep per device (`0` = disabled) |
 | `-retention-days` | `0` | Delete backups older than N days (`0` = disabled) |
 | `-result-table`   | `true`  | Display colorized summary table on terminal (`NO_COLOR` to disable) |
