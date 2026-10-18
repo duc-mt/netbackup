@@ -29,7 +29,11 @@ type Profile struct {
 	//            and feed SetupCommands + BackupCommand to it line by
 	//            line. Needed for platforms whose SSH login drops into a
 	//            restricted menu/shell rather than accepting a one-shot
-	//            command (e.g. pfSense's console menu).
+	//            command (e.g. pfSense's console menu), and also for
+	//            platforms whose exec channel is simply unreliable (e.g.
+	//            Cisco Small Business SF/SG/CBS/C1300, profile "cisco_sb":
+	//            still paginates with no tty attached, and often never
+	//            sends an exit-status back).
 	Interactive bool
 
 	// SetupCommands run before BackupCommand, only in Interactive mode
@@ -97,11 +101,25 @@ var Profiles = map[string]Profile{
 	},
 	"aruba": {
 		Key:           "aruba",
-		Name:          "Aruba AOS-S / AOS-CX",
+		Name:          "Aruba AOS-S",
 		Interactive:   false,
 		SetupCommands: []string{"no page"},
 		BackupCommand: "show running-config",
 		EndMarkers:    []string{"\nend", "\r\nend", ";\n", ";\r\n"},
+		FileExtension: ".cfg",
+	},
+	// AOS-CX is a different OS from AOS-S (not just a newer CLI skin): its
+	// "show running-config" dump has no trailing sentinel comparable to
+	// AOS-S's semicolon-terminated blocks, so reusing the "aruba" profile's
+	// EndMarkers here reports every CX backup as TRUNCATED_OUTPUT even
+	// though the capture is complete. Tag AOS-CX switches with vendor key
+	// "aruba_cx" (or alias "aos_cx") in the inventory instead of "aruba".
+	"aruba_cx": {
+		Key:           "aruba_cx",
+		Name:          "Aruba AOS-CX",
+		Interactive:   false,
+		SetupCommands: []string{"no page"},
+		BackupCommand: "show running-config",
 		FileExtension: ".cfg",
 	},
 	"ruijie": {
@@ -184,6 +202,28 @@ var Profiles = map[string]Profile{
 		BackupCommand: "show running-config",
 		FileExtension: ".cfg",
 	},
+	// Cisco Small Business switches (SF/SG-300, CBS-250/350, C1300) run a
+	// cut-down embedded CLI that is close enough to IOS to look like
+	// "cisco_ios" at a glance, but differs in two ways that matter here:
+	//   1. Their SSH exec channel frequently closes without ever sending an
+	//      exit-status/exit-signal message, which RunCommand now tolerates
+	//      (see sshclient.RunCommand), but which still leaves...
+	//   2. ...pagination active even on a non-interactive exec channel (the
+	//      comment on the Interactive field above does not hold for this
+	//      family), so a plain one-shot "show running-config" hangs waiting
+	//      on a "--More--" prompt nobody answers until CommandTimeout fires.
+	// Using the interactive/PTY path avoids both: it reads output directly
+	// instead of relying on exit-status, and sshclient's pager detection
+	// answers "--More--" automatically. "terminal datadump" is this
+	// family's paging-disable command (NOT "terminal length 0").
+	"cisco_sb": {
+		Key:           "cisco_sb",
+		Name:          "Cisco Small Business (SF/SG-300, CBS-250/350, C1300)",
+		Interactive:   true,
+		SetupCommands: []string{"terminal datadump"},
+		BackupCommand: "show running-config",
+		FileExtension: ".cfg",
+	},
 }
 
 var aliases = map[string]string{
@@ -217,9 +257,9 @@ var aliases = map[string]string{
 
 	// Aruba
 	"aruba":    "aruba",
-	"aruba_cx": "aruba",
-	"aos_cx":   "aruba",
 	"aos_s":    "aruba",
+	"aruba_cx": "aruba_cx",
+	"aos_cx":   "aruba_cx",
 
 	// Ruijie
 	"ruijie": "ruijie",
@@ -248,6 +288,17 @@ var aliases = map[string]string{
 
 	// Generic
 	"generic": "generic",
+
+	// Cisco Small Business (SF/SG-300, CBS-250/350, C1300)
+	"cisco_sb":             "cisco_sb",
+	"cisco_small_business": "cisco_sb",
+	"ciscosb":              "cisco_sb",
+	"sf300":                "cisco_sb",
+	"sg300":                "cisco_sb",
+	"cbs":                  "cisco_sb",
+	"cbs250":               "cisco_sb",
+	"cbs350":               "cisco_sb",
+	"c1300":                "cisco_sb",
 }
 
 // CanonicalKey normalizes a vendor name or alias (handling case, '-', ' ')
