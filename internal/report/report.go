@@ -120,7 +120,6 @@ const defaultMaxErrorColumnWidth = 100
 // always have at least a readable amount of room when constrained by terminal width.
 const minErrorColumnWidth = 30
 
-
 // FormatFileSize renders a byte count as a human-readable size
 // (B/KB/MB/...). It returns an error instead of panicking on a size that
 // can never be valid, so a single bad value degrades only its own row.
@@ -178,7 +177,6 @@ func formatError(err error, maxWidth ...int) string {
 	runes := []rune(msg)
 	return string(runes[:limit-1]) + "…"
 }
-
 
 // colorForStatus maps a status string to an ANSI color code: SUCCESS /
 // UNCHANGED-like statuses are green, AUTH FAILED and other failures are
@@ -446,7 +444,6 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 		writeRow(out, cols, widths, row, colorize)
 	}
 	writeBorder(out, widths, "╰", "┴", "╯")
-
 
 	if len(results) > 0 {
 		var succeeded, failed int

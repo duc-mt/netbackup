@@ -272,4 +272,3 @@ func TestFormatError(t *testing.T) {
 		t.Errorf("expected ellipsis suffix, got %q", gotDefault)
 	}
 }
-
