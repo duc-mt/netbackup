@@ -118,7 +118,7 @@ var Profiles = map[string]Profile{
 		Key:           "checkpoint_gaia",
 		Name:          "Check Point Gaia (clish)",
 		Interactive:   false,
-		BackupCommand: "show configuration",
+		BackupCommand: `clish -c "show configuration"`,
 		FileExtension: ".cfg",
 	},
 	// pfSense's default SSH login presents a restricted console menu
