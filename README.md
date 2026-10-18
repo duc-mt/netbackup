@@ -355,16 +355,8 @@ edge-rtr-01,10.30.1.1,22,juniper_junos,default,mgmt-gw.corp.com:22
 
 - `port` defaults to `22`.
 - `vendor` defaults to `generic` (`show running-config`). Supported vendor keys:
-  `cisco_ios`, `cisco_sb`, `huawei_vrp`, `juniper_junos`, `aruba`, `aruba_cx`,
-  `ruijie`, `fortigate`, `checkpoint_gaia`, `paloalto`, `pfsense`, `sophos`,
-  `vyos`, `arista`, `generic`.
-  - `cisco_sb` is for Cisco Small Business switches (SF/SG-300, CBS-250/350,
-    C1300) -- do **not** tag these as `cisco_ios`. Their embedded CLI looks
-    IOS-like but the SSH exec channel behaves differently enough (see
-    `internal/vendor/vendor.go`) that it needs its own profile.
-  - `aruba_cx` is for ArubaOS-CX switches; plain `aruba` is AOS-S only. The
-    two have different `show running-config` output formats, so tagging a
-    CX switch as `aruba` reports every backup as truncated.
+  `cisco_ios`, `huawei_vrp`, `juniper_junos`, `aruba`, `ruijie`, `fortigate`,
+  `checkpoint_gaia`, `paloalto`, `pfsense`, `sophos`, `vyos`, `arista`, `generic`.
 - `credential_group` defaults to `default`. If specified as `site_hcm`, the
   tool looks for `NETBACKUP_SITE_HCM_USERNAME` and `NETBACKUP_SITE_HCM_PASSWORD`,
   falling back to `NETBACKUP_USERNAME` / `NETBACKUP_PASSWORD` if not set.

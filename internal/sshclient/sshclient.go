@@ -658,20 +658,6 @@ func RunCommand(client *ssh.Client, command string, opts Options) (string, error
 	select {
 	case err := <-done:
 		if err != nil {
-			// Some platforms (Cisco Small Business SF/SG/CBS/C1300 CLI is
-			// the known offender) close the exec channel cleanly after the
-			// command finishes but never send an exit-status or exit-signal
-			// message. golang.org/x/crypto/ssh surfaces that as
-			// *ssh.ExitMissingError even though every byte of output was
-			// already delivered before the channel closed. Treat it as
-			// success rather than discarding a perfectly good backup --
-			// but only when we actually captured something, so a device
-			// that legitimately failed before producing output still
-			// reports an error.
-			var missingExit *ssh.ExitMissingError
-			if errors.As(err, &missingExit) && stdout.Len() > 0 {
-				return stdout.String(), nil
-			}
 			msg := strings.TrimSpace(stderr.String())
 			if msg != "" {
 				return stdout.String(), fmt.Errorf("command failed: %w (stderr: %s)", err, msg)

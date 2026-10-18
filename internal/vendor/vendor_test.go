@@ -48,16 +48,8 @@ func TestAliases(t *testing.T) {
 		"fortios":    "fortigate",
 		"eos":        "arista",
 		"checkpoint": "checkpoint_gaia",
-		"aruba-cx":   "aruba_cx", // AOS-CX is a distinct profile from AOS-S ("aruba"): see vendor.go
-		"aos-cx":     "aruba_cx",
-		"aruba":      "aruba",
-		"aos-s":      "aruba",
+		"aruba-cx":   "aruba",
 		"rgos":       "ruijie",
-		"sf300":      "cisco_sb",
-		"sg300":      "cisco_sb",
-		"cbs350":     "cisco_sb",
-		"c1300":      "cisco_sb",
-		"cisco_sb":   "cisco_sb",
 	}
 
 	for input, expectedKey := range cases {
