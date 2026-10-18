@@ -112,9 +112,14 @@ func tableColumns(o rowOptions) []string {
 	return append(cols, "ERROR")
 }
 
-// maxErrorColumnWidth caps how wide the ERROR column can grow, so one
-// long SSH error message can't blow out the whole table's layout.
-const maxErrorColumnWidth = 48
+// defaultMaxErrorColumnWidth is the baseline error column width when stdout is
+// not a terminal or when terminal width cannot be determined.
+const defaultMaxErrorColumnWidth = 100
+
+// minErrorColumnWidth is the floor for the error column so that error messages
+// always have at least a readable amount of room when constrained by terminal width.
+const minErrorColumnWidth = 30
+
 
 // FormatFileSize renders a byte count as a human-readable size
 // (B/KB/MB/...). It returns an error instead of panicking on a size that
@@ -156,18 +161,24 @@ func FormatDuration(seconds float64) (string, error) {
 }
 
 // formatError renders the Error field for display: "-" when nil, and the
-// message truncated to maxErrorColumnWidth otherwise.
-func formatError(err error) string {
+// message formatted as a single line. If maxWidth > 0, it truncates with "…"
+// when exceeding maxWidth.
+func formatError(err error, maxWidth ...int) string {
 	if err == nil {
 		return "-"
 	}
+	limit := defaultMaxErrorColumnWidth
+	if len(maxWidth) > 0 && maxWidth[0] > 0 {
+		limit = maxWidth[0]
+	}
 	msg := strings.ReplaceAll(err.Error(), "\n", " ")
-	if utf8.RuneCountInString(msg) <= maxErrorColumnWidth {
+	if utf8.RuneCountInString(msg) <= limit {
 		return msg
 	}
 	runes := []rune(msg)
-	return string(runes[:maxErrorColumnWidth-1]) + "…"
+	return string(runes[:limit-1]) + "…"
 }
+
 
 // colorForStatus maps a status string to an ANSI color code: SUCCESS /
 // UNCHANGED-like statuses are green, AUTH FAILED and other failures are
@@ -340,6 +351,20 @@ func PrintSummaryTable(results []BackupResult, totalRuntime ...time.Duration) {
 	fprintSummaryTable(os.Stdout, os.Stderr, results, colorize, totalRuntime...)
 }
 
+// terminalWidth inspects w and returns the visible terminal columns, or 0 if
+// w is not a terminal or the size cannot be determined.
+func terminalWidth(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return 0
+	}
+	width, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
+}
+
 // fprintSummaryTable does the real work against explicit writers so it
 // can be exercised by tests without touching the process's real
 // stdout/stderr.
@@ -372,6 +397,48 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 	}
 
 	widths := columnWidths(cols, rows)
+
+	// Adjust flexible columns (specifically ERROR, the trailing column) to fit
+	// terminal width if stdout is an interactive terminal.
+	if tw := terminalWidth(out); tw > 0 && len(cols) > 0 {
+		lastIdx := len(cols) - 1
+		if cols[lastIdx] == "ERROR" {
+			// Calculate width used by all fixed columns plus borders and 2-space padding per column.
+			// Format: "│ col1 │ col2 │ ... │"
+			// Total width = sum(widths[0..lastIdx-1]) + 3 * len(cols) + 1 + widths[lastIdx]
+			fixedWidth := 1 // leading "│"
+			for i := 0; i < lastIdx; i++ {
+				fixedWidth += widths[i] + 3 // " " + cell + " │"
+			}
+			fixedWidth += 3 // for ERROR column overhead: " " + ERROR + " │"
+
+			budget := tw - fixedWidth
+			if budget < minErrorColumnWidth {
+				budget = minErrorColumnWidth
+			}
+
+			// If the error column natural width exceeds budget, or budget allows showing more,
+			// resize the ERROR column to fit the terminal neatly.
+			if budget < widths[lastIdx] {
+				widths[lastIdx] = budget
+				// Truncate error cells to budget
+				for rowIdx := range rows {
+					if lastIdx < len(rows[rowIdx].cells) {
+						errCell := rows[rowIdx].cells[lastIdx]
+						if utf8.RuneCountInString(errCell) > budget {
+							runes := []rune(errCell)
+							if budget > 1 {
+								rows[rowIdx].cells[lastIdx] = string(runes[:budget-1]) + "…"
+							} else {
+								rows[rowIdx].cells[lastIdx] = string(runes[:budget])
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	writeBorder(out, widths, "╭", "┬", "╮")
 	writeHeader(out, cols, widths)
 	writeBorder(out, widths, "├", "┼", "┤")
@@ -379,6 +446,7 @@ func fprintSummaryTable(out, warn io.Writer, results []BackupResult, colorize bo
 		writeRow(out, cols, widths, row, colorize)
 	}
 	writeBorder(out, widths, "╰", "┴", "╯")
+
 
 	if len(results) > 0 {
 		var succeeded, failed int

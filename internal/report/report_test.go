@@ -239,3 +239,37 @@ func TestTableWithTotalRuntime(t *testing.T) {
 		t.Errorf("expected Total Runtime: 5.00s, got:\n%s", out2.String())
 	}
 }
+
+func TestFormatError(t *testing.T) {
+	if got := formatError(nil); got != "-" {
+		t.Errorf("formatError(nil) = %q, want %q", got, "-")
+	}
+
+	shortErr := errors.New("connection reset by peer")
+	if got := formatError(shortErr); got != "connection reset by peer" {
+		t.Errorf("formatError(shortErr) = %q, want %q", got, "connection reset by peer")
+	}
+
+	// Newlines replaced with spaces
+	multiline := errors.New("line 1\nline 2")
+	if got := formatError(multiline); got != "line 1 line 2" {
+		t.Errorf("formatError(multiline) = %q, want %q", got, "line 1 line 2")
+	}
+
+	// Custom maxWidth
+	longErr := errors.New("0123456789abcdef")
+	if got := formatError(longErr, 10); got != "012345678…" {
+		t.Errorf("formatError(longErr, 10) = %q, want %q", got, "012345678…")
+	}
+
+	// Default limit (100)
+	longMsg := strings.Repeat("a", 150)
+	gotDefault := formatError(errors.New(longMsg))
+	if len([]rune(gotDefault)) != defaultMaxErrorColumnWidth {
+		t.Errorf("expected default truncation length %d, got %d", defaultMaxErrorColumnWidth, len([]rune(gotDefault)))
+	}
+	if !strings.HasSuffix(gotDefault, "…") {
+		t.Errorf("expected ellipsis suffix, got %q", gotDefault)
+	}
+}
+
