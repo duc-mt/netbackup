@@ -124,7 +124,7 @@ func parseFlags() cliOptions {
 	flag.BoolVar(&opts.saveUnchanged, "save-unchanged", false, "save a new backup file even if configuration is identical to the previous backup")
 	flag.IntVar(&opts.retentionCount, "retention-count", 0, "maximum number of recent backups to keep per device (0 to disable)")
 	flag.IntVar(&opts.retentionDays, "retention-days", 0, "prune backups older than N days per device (0 to disable)")
-	flag.StringVar(&opts.knownHostsPath, "known-hosts", "known_hosts", "path to an OpenSSH known_hosts file used to verify device host keys")
+	flag.StringVar(&opts.knownHostsPath, "known-hosts", "", "path to an OpenSSH known_hosts file used to verify device host keys (defaults to ~/.ssh/known_hosts or %USERPROFILE%\\.ssh\\known_hosts)")
 	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for unknown host keys: 'strict' or 'accept-new'")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
 	flag.BoolVar(&opts.legacyAlgorithms, "legacy-algorithms", false, "allow negotiation of legacy SSH algorithms (3des-cbc, diffie-hellman-group1-sha1, ssh-dss) for older network gear")
@@ -296,8 +296,12 @@ func run() int {
 		logger.Warn("host key verification disabled via -insecure-ignore-host-key -- connections are vulnerable to MITM")
 		hostKeyCallback = ssh.InsecureIgnoreHostKey() //nolint:gosec // G106: explicit opt-in via CLI flag
 	} else {
+		targetKnownHosts := opts.knownHostsPath
+		if targetKnownHosts == "" {
+			targetKnownHosts = sshclient.DefaultKnownHostsFile()
+		}
 		policy := sshclient.KnownHostsPolicy(opts.knownHostsPolicy)
-		hostKeyCallback, err = sshclient.KnownHostsCallback(opts.knownHostsPath, policy)
+		hostKeyCallback, err = sshclient.KnownHostsCallback(targetKnownHosts, policy)
 		if err != nil {
 			logger.Error("loading known_hosts: %v", err)
 			return 1

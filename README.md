@@ -182,6 +182,9 @@ chmod 600 .env
 | `-retries`        | `0`     | Number of retry attempts per device upon failure (`0` = no retry) |
 | `-retry-delay`    | `2s`    | Delay between retries per device |
 | `-dial-jitter`    | `100ms` | Randomized dial jitter delay applied before connecting to avoid CPU spikes (`0` to disable) |
+| `-known-hosts`    | `""`    | Path to OpenSSH `known_hosts` (defaults to `~/.ssh/known_hosts` or `%USERPROFILE%\.ssh\known_hosts`) |
+| `-known-hosts-policy` | `strict` | Policy for unknown host keys: `strict` (reject) or `accept-new` (trust on first contact) |
+| `-insecure-ignore-host-key` | `false` | DANGEROUS: skip host key verification entirely (vulnerable to MITM) |
 | `-legacy-algorithms` | `false` | Allow negotiation of legacy SSH ciphers/kex (3des-cbc, diffie-hellman-group1-sha1, ssh-dss) |
 | `-tcp-mss`        | `1360`  | TCP Maximum Segment Size for outgoing sockets (`0` = OS default, `>0` = clamp MSS) |
 | `-jump`           | `true`  | Enable bastion/jump host routing (`-jump=false` connects directly) |
@@ -189,6 +192,16 @@ chmod 600 .env
 | `-jump-user`      | `""`    | SSH username for global bastion (overrides `NETBACKUP_JUMP_USERNAME`) |
 | `-jump-password`  | `""`    | SSH password for global bastion (overrides `NETBACKUP_JUMP_PASSWORD`) |
 | `-jump-key-file`  | `""`    | SSH private key file for global bastion (overrides `NETBACKUP_JUMP_KEY_FILE`) |
+
+### Host Keys & Cross-Platform Verification
+
+Netbackup verifies device host keys against standard OpenSSH `known_hosts` files without creating local `./known_hosts` artifacts in your project directory:
+- **Automatic 3-OS Discovery**:
+  - **Linux / macOS**: Reads `~/.ssh/known_hosts` (and `/etc/ssh/ssh_known_hosts` / `/etc/ssh/ssh_known_hosts2` if present).
+  - **Windows**: Reads `%USERPROFILE%\.ssh\known_hosts` (and `%ProgramData%\ssh\ssh_known_hosts` if present).
+  - Supports tilde (`~`) expansion in `-known-hosts`.
+- **First contact enrollment**: Run with `-known-hosts-policy accept-new` to enroll unseen devices. Discovered keys are safely appended only to the user's personal known_hosts file, preventing duplicates. A changed key is always rejected.
+- **Strict enforcement**: By default (`-known-hosts-policy strict`), unrecorded devices or changed host keys are rejected to protect against MITM.
 
 ### Run Summary Table
 

@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -99,25 +101,103 @@ const (
 	PolicyAcceptNew KnownHostsPolicy = "accept-new" // add unknown keys to the known_hosts file
 )
 
+// DefaultKnownHostsFile returns the default user OpenSSH known_hosts path
+// for the current OS (Linux/macOS: ~/.ssh/known_hosts, Windows: %USERPROFILE%\.ssh\known_hosts).
+func DefaultKnownHostsFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "known_hosts"
+	}
+	return filepath.Join(home, ".ssh", "known_hosts")
+}
+
+// SystemKnownHostsFiles returns the standard system-wide known_hosts file paths
+// for the current OS if they exist.
+// Linux/macOS: /etc/ssh/ssh_known_hosts, /etc/ssh/ssh_known_hosts2
+// Windows: %ProgramData%\ssh\ssh_known_hosts
+func SystemKnownHostsFiles() []string {
+	var candidates []string
+	if runtime.GOOS == "windows" {
+		if pd := os.Getenv("ProgramData"); pd != "" {
+			candidates = append(candidates, filepath.Join(pd, "ssh", "ssh_known_hosts"))
+		}
+	} else {
+		candidates = append(candidates, "/etc/ssh/ssh_known_hosts", "/etc/ssh/ssh_known_hosts2")
+	}
+
+	var existing []string
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			existing = append(existing, c)
+		}
+	}
+	return existing
+}
+
+// ExpandHome resolves a leading "~/" or "~\" against the current user's home directory.
+func ExpandHome(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			rest := filepath.FromSlash(strings.ReplaceAll(path[2:], `\`, "/"))
+			return filepath.Join(home, rest)
+		}
+	}
+	return path
+}
+
 // KnownHostsCallback builds a HostKeyCallback from an OpenSSH-format known_hosts
-// file and enforces the given policy (strict or accept-new).
+// file and enforces the given policy (strict or accept-new). If path points to
+// the default user known_hosts file, system-wide known_hosts files are also checked as read-only fallbacks.
 func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallback, error) {
 	if policy != PolicyStrict && policy != PolicyAcceptNew {
 		return nil, fmt.Errorf("invalid known_hosts policy: %q", policy)
 	}
 
-	// Create file if it doesn't exist
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		f, err := os.OpenFile(path, os.O_CREATE, 0o600)
-		if err != nil {
-			return nil, fmt.Errorf("creating known_hosts %q: %w", path, err)
+	path = ExpandHome(path)
+
+	// In accept-new mode, ensure user file and its directory exist
+	if policy == PolicyAcceptNew {
+		if err := ensureFile(path); err != nil {
+			return nil, err
 		}
-		f.Close()
 	}
 
-	checker, err := knownhosts.New(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading known_hosts %q: %w", path, err)
+	readFiles := []string{}
+	if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
+		readFiles = append(readFiles, path)
+	}
+
+	defUser := DefaultKnownHostsFile()
+	if filepath.Clean(path) == filepath.Clean(defUser) {
+		for _, sysFile := range SystemKnownHostsFiles() {
+			if filepath.Clean(sysFile) != filepath.Clean(path) {
+				readFiles = append(readFiles, sysFile)
+			}
+		}
+	}
+
+	var checker ssh.HostKeyCallback
+	if len(readFiles) == 0 {
+		if policy == PolicyStrict {
+			return nil, fmt.Errorf("reading known_hosts %q: open %s: no such file or directory", path, path)
+		}
+		var err error
+		checker, err = knownhosts.New()
+		if err != nil {
+			return nil, fmt.Errorf("reading known_hosts %q: %w", path, err)
+		}
+	} else {
+		var err error
+		checker, err = knownhosts.New(readFiles...)
+		if err != nil {
+			return nil, fmt.Errorf("reading known_hosts %q: %w", path, err)
+		}
 	}
 
 	var mu sync.Mutex // protects concurrent writes to the known_hosts file
@@ -134,15 +214,13 @@ func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallba
 			if policy == PolicyAcceptNew {
 				mu.Lock()
 				defer mu.Unlock()
-				// We must re-check inside the lock to avoid races where another goroutine just added it
-				checkerReloaded, err := knownhosts.New(path)
-				if err == nil {
-					if err := checkerReloaded(hostname, remote, key); err == nil {
-						return nil
-					}
+
+				// Re-check inside the lock in case another goroutine or process just recorded it
+				if isHostKeyRecorded(path, hostname, remote, key) {
+					return nil
 				}
 
-				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 				if err != nil {
 					return fmt.Errorf("failed to open known_hosts to accept new key: %w", err)
 				}
@@ -154,7 +232,15 @@ func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallba
 				}
 
 				// Re-initialize checker so subsequent connections in this run use the updated file
-				if c, err := knownhosts.New(path); err == nil {
+				updatedFiles := []string{path}
+				if filepath.Clean(path) == filepath.Clean(defUser) {
+					for _, sysFile := range SystemKnownHostsFiles() {
+						if filepath.Clean(sysFile) != filepath.Clean(path) {
+							updatedFiles = append(updatedFiles, sysFile)
+						}
+					}
+				}
+				if c, err := knownhosts.New(updatedFiles...); err == nil {
 					checker = c
 				}
 				return nil
@@ -165,6 +251,34 @@ func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallba
 		// Key mismatch (mitm or changed key)
 		return fmt.Errorf("host key verification failed for %s: %w", hostname, err)
 	}, nil
+}
+
+func isHostKeyRecorded(path string, hostname string, remote net.Addr, key ssh.PublicKey) bool {
+	cb, err := knownhosts.New(path)
+	if err != nil {
+		return false
+	}
+	if remote == nil {
+		if host, port, err := net.SplitHostPort(hostname); err == nil {
+			var p int
+			_, _ = fmt.Sscanf(port, "%d", &p)
+			remote = &net.TCPAddr{IP: net.ParseIP(host), Port: p}
+		}
+	}
+	return cb(hostname, remote, key) == nil
+}
+
+func ensureFile(path string) error {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("creating known_hosts directory %q: %w", dir, err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating known_hosts %q: %w", path, err)
+	}
+	return f.Close()
 }
 
 // AuthOptions contains authentication parameters for SSH connections.
