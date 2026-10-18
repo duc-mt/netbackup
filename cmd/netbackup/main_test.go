@@ -287,11 +287,23 @@ func TestEmitReportLogsWarningsAndOutcome(t *testing.T) {
 
 func TestCLIOptionsDefaults(t *testing.T) {
 	opts := parseFlags()
+	if opts.concurrency != 10 {
+		t.Errorf("concurrency should default to 10, got %d", opts.concurrency)
+	}
 	if opts.retries < 0 {
 		t.Errorf("retries should default to >= 0, got %d", opts.retries)
 	}
 	if opts.dryRun {
 		t.Errorf("dryRun should default to false, got %v", opts.dryRun)
+	}
+	if opts.updateKnownHosts {
+		t.Errorf("updateKnownHosts should default to false, got %v", opts.updateKnownHosts)
+	}
+	if opts.knownHostsPolicy != "strict" {
+		t.Errorf("knownHostsPolicy should default to strict, got %s", opts.knownHostsPolicy)
+	}
+	if !opts.legacyAlgorithms {
+		t.Errorf("legacyAlgorithms should default to true, got %v", opts.legacyAlgorithms)
 	}
 }
 

@@ -52,11 +52,12 @@ func FromBackupResultsToAudit(results []backup.Result) []AuditRecord {
 		var status, failureReason, errMsg string
 
 		if r.Success {
-			if r.DryRun {
+			switch {
+			case r.DryRun:
 				status = "DRY_RUN"
-			} else if r.Unchanged && r.BytesWritten == 0 {
+			case r.Unchanged && r.BytesWritten == 0:
 				status = "SKIPPED"
-			} else {
+			default:
 				status = "SUCCEEDED"
 			}
 		} else {

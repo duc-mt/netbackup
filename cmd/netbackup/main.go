@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,6 +67,7 @@ type cliOptions struct {
 	retentionDays         int
 	knownHostsPath        string
 	knownHostsPolicy      string
+	updateKnownHosts      bool
 	insecureIgnoreHostKey bool
 	resultTable           bool
 	showDiff              bool
@@ -118,7 +120,7 @@ func parseFlags() cliOptions {
 	flag.IntVar(&opts.retries, "retries", 0, "number of retry attempts per device upon failure (default: 0)")
 	flag.DurationVar(&opts.retryDelay, "retry-delay", 2*time.Second, "delay between retries per device (default: 2s)")
 	flag.DurationVar(&opts.dialJitter, "dial-jitter", 100*time.Millisecond, "random dial jitter delay up to this value applied before connection (0 to disable)")
-	flag.IntVar(&opts.concurrency, "concurrency", 5, "maximum number of devices to back up in parallel")
+	flag.IntVar(&opts.concurrency, "concurrency", 10, "maximum number of devices to back up in parallel")
 	flag.DurationVar(&opts.connectTimeout, "connect-timeout", 10*time.Second, "TCP connect + SSH handshake timeout per device")
 	flag.DurationVar(&opts.commandTimeout, "command-timeout", 30*time.Second, "time budget for running the backup command per device")
 	flag.BoolVar(&opts.redactSecrets, "redact", true, "mask passwords, pre-shared keys, and SNMP communities from saved files")
@@ -126,9 +128,11 @@ func parseFlags() cliOptions {
 	flag.IntVar(&opts.retentionCount, "retention-count", 0, "maximum number of recent backups to keep per device (0 to disable)")
 	flag.IntVar(&opts.retentionDays, "retention-days", 0, "prune backups older than N days per device (0 to disable)")
 	flag.StringVar(&opts.knownHostsPath, "known-hosts", "", "path to an OpenSSH known_hosts file used to verify device host keys (defaults to ~/.ssh/known_hosts or %USERPROFILE%\\.ssh\\known_hosts)")
-	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for unknown host keys: 'strict' or 'accept-new'")
+	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for host keys: 'strict' (reject unknown/changed), 'accept-new' (learn new), or 'update' (learn new and replace changed keys)")
+	flag.BoolVar(&opts.updateKnownHosts, "update-known-hosts", false, "automatically remove mismatched existing keys and learn new keys in known_hosts (alias for -known-hosts-policy update)")
+	flag.BoolVar(&opts.updateKnownHosts, "replace-host-keys", false, "alias for -update-known-hosts")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")
-	flag.BoolVar(&opts.legacyAlgorithms, "legacy-algorithms", false, "allow negotiation of legacy SSH algorithms (3des-cbc, diffie-hellman-group1-sha1, ssh-dss) for older network gear")
+	flag.BoolVar(&opts.legacyAlgorithms, "legacy-algorithms", true, "allow negotiation of legacy SSH algorithms (3des-cbc, diffie-hellman-group1-sha1, ssh-dss) as fallback for older network gear")
 	flag.BoolVar(&opts.resultTable, "result-table", true, "print a colorized per-device result table to stdout after the run")
 	flag.BoolVar(&opts.showDiff, "diff", true, "display colorized diff against previous backup when configuration changes")
 	flag.BoolVar(&opts.showDiff, "show-diff", true, "alias for -diff")
@@ -305,11 +309,24 @@ func run() int {
 		if targetKnownHosts == "" {
 			targetKnownHosts = sshclient.DefaultKnownHostsFile()
 		}
-		policy := sshclient.KnownHostsPolicy(opts.knownHostsPolicy)
+		rawPolicy := opts.knownHostsPolicy
+		if opts.updateKnownHosts {
+			rawPolicy = "update"
+		} else if envPolicy := credStore.Get("NETBACKUP_KNOWN_HOSTS_POLICY"); envPolicy != "" {
+			rawPolicy = envPolicy
+		} else if envUpdate := strings.ToLower(credStore.Get("NETBACKUP_UPDATE_KNOWN_HOSTS")); envUpdate == "true" || envUpdate == "1" || envUpdate == "yes" {
+			rawPolicy = "update"
+		}
+		policy := sshclient.KnownHostsPolicy(rawPolicy)
 		hostKeyCallback, err = sshclient.KnownHostsCallback(targetKnownHosts, policy)
 		if err != nil {
 			logger.Error("loading known_hosts: %v", err)
 			return 1
+		}
+		if policy == sshclient.PolicyUpdate || policy == sshclient.PolicyReplace {
+			logger.Info("known_hosts policy: %s (auto-updating changed keys and recording new devices)", policy)
+		} else if policy == sshclient.PolicyAcceptNew {
+			logger.Info("known_hosts policy: accept-new (recording new devices into known_hosts)")
 		}
 	}
 
@@ -322,6 +339,15 @@ func run() int {
 		} else if len(memStore.List()) > 0 {
 			logger.Info("loaded %d learned route(s) from persistent memory (%s)", len(memStore.List()), opts.memoryFile)
 		}
+	}
+
+	legacyAlgorithms := opts.legacyAlgorithms
+	if envVal := credStore.Get("NETBACKUP_LEGACY_ALGORITHMS"); envVal != "" {
+		val := strings.ToLower(envVal)
+		legacyAlgorithms = (val == "true" || val == "1" || val == "yes")
+	}
+	if legacyAlgorithms {
+		logger.Info("legacy algorithms enabled: allowing legacy ciphers (3des-cbc, aes128-cbc, arcfour), key exchanges (dh-group1, dh-group14-sha1, dh-group-exchange-sha1), and host keys (ssh-dss)")
 	}
 
 	cfg := backup.Config{
@@ -339,6 +365,7 @@ func run() int {
 		RetryDelay:          opts.retryDelay,
 		DialJitter:          opts.dialJitter,
 		ShowDiff:            opts.showDiff,
+		OnProgress:          logger.Progress,
 		JumpEnabled:         opts.jumpEnabled,
 		JumpDefaultHost:     opts.jumpHost,
 		MemStore:            memStore,
@@ -348,7 +375,7 @@ func run() int {
 			CommandTimeout:   opts.commandTimeout,
 			HostKeyCallback:  hostKeyCallback,
 			TCPMSS:           opts.tcpMSS,
-			LegacyAlgorithms: opts.legacyAlgorithms,
+			LegacyAlgorithms: legacyAlgorithms,
 		},
 	}
 

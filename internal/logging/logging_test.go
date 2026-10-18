@@ -213,3 +213,54 @@ func TestLoggingDryRun(t *testing.T) {
 		t.Errorf("log missing expected totals: %s", logStr)
 	}
 }
+
+func TestLoggingProgress(t *testing.T) {
+	logDir := t.TempDir()
+
+	logger, err := New(logDir, "text")
+	if err != nil {
+		t.Fatalf("failed to create logger: %v", err)
+	}
+
+	resDry := backup.Result{
+		Device:   inventory.Device{Hostname: "sw-dry", Address: "10.0.0.1"},
+		Success:  true,
+		DryRun:   true,
+		Duration: 50 * time.Millisecond,
+	}
+	resSaved := backup.Result{
+		Device:      inventory.Device{Hostname: "sw-saved", Address: "10.0.0.2"},
+		Success:     true,
+		OutputPath:  "backups/test/sw-saved.cfg",
+		DiffAdded:   3,
+		DiffRemoved: 1,
+		Duration:    150 * time.Millisecond,
+	}
+	resFail := backup.Result{
+		Device:   inventory.Device{Hostname: "sw-fail", Address: "10.0.0.3"},
+		Success:  false,
+		Category: errcat.CategoryAuthFailed,
+		Err:      errors.New("bad password"),
+		Duration: 80 * time.Millisecond,
+	}
+
+	logger.Progress(1, 3, resDry)
+	logger.Progress(2, 3, resSaved)
+	logger.Progress(3, 3, resFail)
+	logger.Close()
+
+	entries, _ := os.ReadDir(logDir)
+	content, _ := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	logStr := string(content)
+
+	expected := []string{
+		"[INFO] [1/3] OK      sw-dry               (10.0.0.1) [DRY-RUN]",
+		"[INFO] [2/3] OK      sw-saved             (10.0.0.2) [SAVED (+3/-1)] -> backups/test/sw-saved.cfg",
+		"[ERROR] [3/3] FAILED  sw-fail              (10.0.0.3) category=AUTHENTICATION_FAILED detail=bad password",
+	}
+	for _, exp := range expected {
+		if !strings.Contains(logStr, exp) {
+			t.Errorf("log file does not contain %q\nFull log:\n%s", exp, logStr)
+		}
+	}
+}

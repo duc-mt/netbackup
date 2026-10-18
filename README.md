@@ -145,7 +145,7 @@ chmod 600 .env
   -out backups \
   -log-dir logs \
   -env-file .env \
-  -concurrency 5 \
+  -concurrency 10 \
   -connect-timeout 10s \
   -command-timeout 30s \
   -redact=true \
@@ -170,7 +170,7 @@ To validate SSH connectivity and authentication without executing commands or wr
 | `-out` | `backups` | Directory to write backup configuration files into |
 | `-log-dir` | `logs` | Directory to write run logs into |
 | `-env-file` | `.env` | Path to optional `.env` file |
-| `-concurrency` | `5` | Maximum number of concurrent SSH device connections |
+| `-concurrency` | `10` | Maximum number of concurrent SSH device connections |
 | `-connect-timeout` | `10s` | TCP dial + SSH handshake timeout per device |
 | `-command-timeout` | `30s` | Timeout for command execution per device |
 | `-redact` | `true` | Redact passwords, pre-shared keys, and SNMP communities |
@@ -192,9 +192,10 @@ To validate SSH connectivity and authentication without executing commands or wr
 | `-retry-delay`    | `2s`    | Delay between retries per device |
 | `-dial-jitter`    | `100ms` | Randomized dial jitter delay applied before connecting to avoid CPU spikes (`0` to disable) |
 | `-known-hosts`    | `""`    | Path to OpenSSH `known_hosts` (defaults to `~/.ssh/known_hosts` or `%USERPROFILE%\.ssh\known_hosts`) |
-| `-known-hosts-policy` | `strict` | Policy for unknown host keys: `strict` (reject) or `accept-new` (trust on first contact) |
+| `-known-hosts-policy` | `strict` | Policy for host keys: `strict` (reject unknown/changed), `accept-new` (trust on first contact), or `update` (learn new and replace changed keys) |
+| `-update-known-hosts` | `false` | Automatically remove mismatched existing keys and learn new keys in `known_hosts` (alias for `-known-hosts-policy update`) |
 | `-insecure-ignore-host-key` | `false` | DANGEROUS: skip host key verification entirely (vulnerable to MITM) |
-| `-legacy-algorithms` | `false` | Allow negotiation of legacy SSH ciphers/kex (3des-cbc, diffie-hellman-group1-sha1, ssh-dss) |
+| `-legacy-algorithms` | `true` | Allow automatic negotiation of legacy SSH algorithms (3des-cbc, dh-group1/14-sha1, dh-gex-sha1, ssh-dss) as fallback for older network gear (`-legacy-algorithms=false` to restrict to modern-only) |
 | `-tcp-mss`        | `1360`  | TCP Maximum Segment Size for outgoing sockets (`0` = OS default, `>0` = clamp MSS) |
 | `-jump`           | `true`  | Enable bastion/jump host routing (`-jump=false` connects directly) |
 | `-jump-host`      | `""`    | Global default bastion `host[:port]` |
@@ -209,7 +210,8 @@ Netbackup verifies device host keys against standard OpenSSH `known_hosts` files
   - **Linux / macOS**: Reads `~/.ssh/known_hosts` (and `/etc/ssh/ssh_known_hosts` / `/etc/ssh/ssh_known_hosts2` if present).
   - **Windows**: Reads `%USERPROFILE%\.ssh\known_hosts` (and `%ProgramData%\ssh\ssh_known_hosts` if present).
   - Supports tilde (`~`) expansion in `-known-hosts`.
-- **First contact enrollment**: Run with `-known-hosts-policy accept-new` to enroll unseen devices. Discovered keys are safely appended only to the user's personal known_hosts file, preventing duplicates. A changed key is always rejected.
+- **First contact enrollment**: Run with `-known-hosts-policy accept-new` to enroll unseen devices. Discovered keys are safely appended only to the user's personal known_hosts file, preventing duplicates. A changed key is rejected.
+- **Automatic key update / rotation**: Run with `-update-known-hosts` (or `-known-hosts-policy update`) to automatically purge mismatched/stale keys from `known_hosts` and record the newly presented host key (e.g. after switch hardware replacement or key regeneration).
 - **Strict enforcement**: By default (`-known-hosts-policy strict`), unrecorded devices or changed host keys are rejected to protect against MITM.
 
 ### Run Summary Table

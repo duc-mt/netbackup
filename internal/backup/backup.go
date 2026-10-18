@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -75,6 +76,9 @@ type Config struct {
 
 	// OnDiff callback is invoked when a diff is detected against the latest backup
 	OnDiff func(dev inventory.Device, lines []string, added, removed int)
+
+	// OnProgress callback is invoked each time a device backup finishes.
+	OnProgress func(completed, total int, res Result)
 
 	// IgnoreVolatile makes change detection compare the "before" and "after"
 	// configurations with volatile lines (clock stamps, "last changed"
@@ -243,6 +247,38 @@ func calcJitter(max time.Duration) time.Duration {
 	return time.Duration(n.Int64())
 }
 
+// ipLocker serializes backup operations per target IP address, preventing
+// parallel workers from overwhelming per-device limits such as JunOS
+// connection-limit (default: 10) or rate-limit (default: 5).
+type ipLocker struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newIPLocker() *ipLocker {
+	return &ipLocker{
+		locks: make(map[string]*sync.Mutex),
+	}
+}
+
+func (l *ipLocker) lock(ip string) func() {
+	if ip == "" {
+		return func() {}
+	}
+	l.mu.Lock()
+	m, ok := l.locks[ip]
+	if !ok {
+		m = &sync.Mutex{}
+		l.locks[ip] = m
+	}
+	l.mu.Unlock()
+
+	m.Lock()
+	return func() {
+		m.Unlock()
+	}
+}
+
 // RunAll backs up every device in the inventory using a bounded pool of
 // workers, so a handful of unreachable devices can't serialise the whole
 // run behind their timeouts, while a reasonable concurrency cap keeps the
@@ -258,9 +294,11 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 	pool := newJumpPool(cfg.SSH, cfg.MemStore)
 	defer pool.closeAll()
 
+	locker := newIPLocker()
 	results := make([]Result, len(devices))
 	sem := make(chan struct{}, cfg.Concurrency)
 	var wg sync.WaitGroup
+	var completed atomic.Int32
 
 	for i, dev := range devices {
 		wg.Add(1)
@@ -268,6 +306,10 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 		go func(i int, dev inventory.Device) {
 			defer wg.Done()
 			defer func() { <-sem }()
+
+			unlock := locker.lock(dev.Address)
+			defer unlock()
+
 			if cfg.DialJitter > 0 {
 				jitter := calcJitter(cfg.DialJitter)
 				select {
@@ -278,11 +320,18 @@ func RunAll(ctx context.Context, devices []inventory.Device, cfg Config) []Resul
 						Category: errcat.CategoryUnknown,
 						Err:      ctx.Err(),
 					}
+					if cfg.OnProgress != nil {
+						cfg.OnProgress(int(completed.Add(1)), len(devices), results[i])
+					}
 					return
 				case <-time.After(jitter):
 				}
 			}
-			results[i] = runOne(ctx, dev, cfg, pool)
+			res := runOne(ctx, dev, cfg, pool)
+			results[i] = res
+			if cfg.OnProgress != nil {
+				cfg.OnProgress(int(completed.Add(1)), len(devices), res)
+			}
 		}(i, dev)
 	}
 
@@ -315,17 +364,17 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 	}
 	dev.Vendor = profile.Key
 
-	attempts := cfg.Retries + 1
-	if attempts < 1 {
-		attempts = 1
+	maxAttempts := cfg.Retries + 1
+	if maxAttempts < 1 {
+		maxAttempts = 1
 	}
-	retryDelay := cfg.RetryDelay
-	if retryDelay <= 0 {
-		retryDelay = 2 * time.Second
+	baseDelay := cfg.RetryDelay
+	if baseDelay <= 0 {
+		baseDelay = 2 * time.Second
 	}
 
 	var output string
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if cfg.DryRun {
 			var client *ssh.Client
 			client, err = connectDevice(ctx, dev, cfg, pool)
@@ -345,11 +394,24 @@ func runOne(ctx context.Context, dev inventory.Device, cfg Config, pool *jumpPoo
 			break
 		}
 
-		if attempt < attempts {
+		// If we encountered a transient rate-limit / connection-limit drop (e.g. JunOS handshake EOF
+		// or connection reset), dynamically allow 1 automatic retry even if cfg.Retries is 0,
+		// and use an extended jittered backoff (3.0s - 4.5s) to allow device token buckets to replenish
+		// and half-closed sockets to drain.
+		isRateLimit := isTransientRateLimitDrop(err)
+		if isRateLimit && attempt == maxAttempts && cfg.Retries == 0 && maxAttempts == 1 {
+			maxAttempts = 2
+		}
+
+		if attempt < maxAttempts {
+			delay := baseDelay
+			if isRateLimit {
+				delay = 3*time.Second + calcJitter(1500*time.Millisecond)
+			}
 			select {
 			case <-ctx.Done():
 				break
-			case <-time.After(retryDelay):
+			case <-time.After(delay):
 			}
 		}
 	}
@@ -568,6 +630,30 @@ func resolveJumpAddr(dev inventory.Device, cfg Config) string {
 	return ""
 }
 
+func isAlgorithmMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "no common algorithm") ||
+		strings.Contains(s, "handshake failed: eof") ||
+		strings.Contains(s, "no matching")
+}
+
+// isTransientRateLimitDrop reports whether an error looks like a transient connection
+// termination caused by network device connection-limit or rate-limit exhaustion
+// (e.g. JunOS "connection-limit 10" or "rate-limit 5" terminating the handshake with EOF
+// or TCP reset).
+func isTransientRateLimitDrop(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "handshake failed: eof") ||
+		strings.Contains(s, "connection reset by peer") ||
+		strings.Contains(s, "broken pipe")
+}
+
 // connectDevice handles the multi-stage connection logic (bastion jump host,
 // learned route memory, direct connection, and neighbor auto-fallback),
 // returning an authenticated *ssh.Client without running any commands.
@@ -616,6 +702,16 @@ func connectDevice(ctx context.Context, dev inventory.Device, cfg Config, pool *
 		}
 		client, err = sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, cfg.SSH)
 		if err != nil {
+			if !cfg.SSH.LegacyAlgorithms && isAlgorithmMismatch(err) {
+				legacySSH := cfg.SSH
+				legacySSH.LegacyAlgorithms = true
+				if retryClient, retryErr := sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, legacySSH); retryErr == nil {
+					client = retryClient
+					err = nil
+				}
+			}
+		}
+		if err != nil {
 			return nil, errcat.Classify(dev.Hostname, "connect", err)
 		}
 	} else {
@@ -635,6 +731,11 @@ func connectDevice(ctx context.Context, dev inventory.Device, cfg Config, pool *
 						jumpClient, err := pool.get(ctx, candEndpoint, candAuth)
 						if err == nil {
 							cl, err := sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, cfg.SSH)
+							if err != nil && !cfg.SSH.LegacyAlgorithms && isAlgorithmMismatch(err) {
+								legacySSH := cfg.SSH
+								legacySSH.LegacyAlgorithms = true
+								cl, err = sshclient.ConnectViaJumpWithAuth(ctx, jumpClient, dev.Address, dev.Port, devAuth, legacySSH)
+							}
 							if err == nil {
 								client = cl
 								connectedViaMemory = true
@@ -655,6 +756,16 @@ func connectDevice(ctx context.Context, dev inventory.Device, cfg Config, pool *
 			}
 
 			client, err = sshclient.ConnectWithAuth(ctx, dev.Address, dev.Port, devAuth, directOpts)
+			if err != nil {
+				if !directOpts.LegacyAlgorithms && isAlgorithmMismatch(err) {
+					legacySSH := directOpts
+					legacySSH.LegacyAlgorithms = true
+					if retryClient, retryErr := sshclient.ConnectWithAuth(ctx, dev.Address, dev.Port, devAuth, legacySSH); retryErr == nil {
+						client = retryClient
+						err = nil
+					}
+				}
+			}
 			if err != nil {
 				if pool != nil {
 					pool.markBadBastion(dev.Address)

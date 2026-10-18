@@ -19,6 +19,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -418,5 +419,140 @@ func TestRunAllDryRun(t *testing.T) {
 	}
 	if r2.Category == "" {
 		t.Errorf("r2 expected non-empty error category")
+	}
+}
+
+func TestRunAllOnProgress(t *testing.T) {
+	devices := []inventory.Device{
+		{Hostname: "dev-1", Address: "127.0.0.1", Port: 65431, Vendor: "cisco_ios"},
+		{Hostname: "dev-2", Address: "127.0.0.1", Port: 65432, Vendor: "cisco_ios"},
+		{Hostname: "dev-3", Address: "127.0.0.1", Port: 65433, Vendor: "cisco_ios"},
+	}
+
+	var mu sync.Mutex
+	var calls []struct {
+		completed int
+		total     int
+		hostname  string
+	}
+
+	cfg := Config{
+		OutputDir:   t.TempDir(),
+		RunName:     "progress-test",
+		Concurrency: 2,
+		DryRun:      true,
+		SSH: sshclient.Options{
+			ConnectTimeout: 50 * time.Millisecond,
+		},
+		OnProgress: func(completed, total int, res Result) {
+			mu.Lock()
+			defer mu.Unlock()
+			calls = append(calls, struct {
+				completed int
+				total     int
+				hostname  string
+			}{completed, total, res.Device.Hostname})
+		},
+	}
+
+	RunAll(context.Background(), devices, cfg)
+
+	if len(calls) != 3 {
+		t.Fatalf("expected 3 OnProgress calls, got %d", len(calls))
+	}
+
+	seenHosts := make(map[string]bool)
+	seenCounts := make(map[int]bool)
+
+	for _, c := range calls {
+		if c.total != 3 {
+			t.Errorf("expected total=3 in callback, got %d", c.total)
+		}
+		if c.completed < 1 || c.completed > 3 {
+			t.Errorf("expected completed in range [1, 3], got %d", c.completed)
+		}
+		seenCounts[c.completed] = true
+		seenHosts[c.hostname] = true
+	}
+
+	if len(seenCounts) != 3 {
+		t.Errorf("expected unique completed counts 1, 2, 3, got %v", seenCounts)
+	}
+	if len(seenHosts) != 3 {
+		t.Errorf("expected all 3 hostnames to be reported, got %v", seenHosts)
+	}
+}
+
+func TestIPLocker(t *testing.T) {
+	locker := newIPLocker()
+
+	// Empty IP should not panic or block
+	unlockEmpty := locker.lock("")
+	unlockEmpty()
+
+	// Mutual exclusion for same IP
+	ip := "192.0.2.1"
+	u1 := locker.lock(ip)
+
+	acquiredSecond := make(chan bool, 1)
+	go func() {
+		u2 := locker.lock(ip)
+		acquiredSecond <- true
+		u2()
+	}()
+
+	select {
+	case <-acquiredSecond:
+		t.Fatal("second lock acquired while first lock was still held")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: second lock blocked
+	}
+
+	u1()
+
+	select {
+	case <-acquiredSecond:
+		// Expected: unblocked after u1()
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second lock failed to acquire after first lock was released")
+	}
+
+	// Concurrent locking of different IPs should not block each other
+	uA := locker.lock("192.0.2.10")
+	doneB := make(chan bool, 1)
+	go func() {
+		uB := locker.lock("192.0.2.20")
+		uB()
+		doneB <- true
+	}()
+
+	select {
+	case <-doneB:
+		// Different IP succeeded without waiting for uA
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("lock on distinct IP was blocked")
+	}
+	uA()
+}
+
+func TestIsTransientRateLimitDrop(t *testing.T) {
+	tests := []struct {
+		err      error
+		expected bool
+	}{
+		{nil, false},
+		{fmt.Errorf("ssh: handshake failed: EOF"), true},
+		{fmt.Errorf("handshake failed: eof"), true},
+		{fmt.Errorf("read: connection reset by peer"), true},
+		{fmt.Errorf("write: broken pipe"), true},
+		{fmt.Errorf("ssh: unable to authenticate, attempted methods [password]"), false},
+		{fmt.Errorf("dial tcp 10.0.0.1:22: i/o timeout"), false},
+	}
+
+	for _, tt := range tests {
+		got := isTransientRateLimitDrop(tt.err)
+		if got != tt.expected {
+			t.Errorf("isTransientRateLimitDrop(%v): expected %v, got %v", tt.err, tt.expected, got)
+		}
 	}
 }

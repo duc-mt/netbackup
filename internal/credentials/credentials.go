@@ -293,3 +293,11 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
+
+// Get returns the value for key from .env file or environment variable.
+func (s *Store) Get(key string) string {
+	if s == nil {
+		return os.Getenv(key)
+	}
+	return firstNonEmpty(s.fileVals[key], os.Getenv(key))
+}

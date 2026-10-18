@@ -365,9 +365,28 @@ func TestLegacyAlgorithmsOption(t *testing.T) {
 		t.Fatalf("buildClientConfig modern failed: %v", err)
 	}
 	for _, c := range cfgModern.Config.Ciphers {
-		if c == "3des-cbc" || c == "aes128-cbc" {
+		if c == "3des-cbc" || c == "aes128-cbc" || c == "arcfour" {
 			t.Errorf("did not expect legacy cipher %s in modern config", c)
 		}
+	}
+	hasDH16 := false
+	hasDHGEX256 := false
+	for _, k := range cfgModern.Config.KeyExchanges {
+		if k == "diffie-hellman-group16-sha512" {
+			hasDH16 = true
+		}
+		if k == "diffie-hellman-group-exchange-sha256" {
+			hasDHGEX256 = true
+		}
+		if k == "diffie-hellman-group-exchange-sha1" || k == "diffie-hellman-group1-sha1" {
+			t.Errorf("did not expect legacy kex %s in modern config", k)
+		}
+	}
+	if !hasDH16 {
+		t.Errorf("expected diffie-hellman-group16-sha512 in modern config, kex: %v", cfgModern.Config.KeyExchanges)
+	}
+	if !hasDHGEX256 {
+		t.Errorf("expected diffie-hellman-group-exchange-sha256 in modern config, kex: %v", cfgModern.Config.KeyExchanges)
 	}
 
 	optsLegacy := Options{
@@ -379,14 +398,38 @@ func TestLegacyAlgorithmsOption(t *testing.T) {
 		t.Fatalf("buildClientConfig legacy failed: %v", err)
 	}
 	has3DES := false
+	hasArcfour := false
 	for _, c := range cfgLegacy.Config.Ciphers {
 		if c == "3des-cbc" {
 			has3DES = true
-			break
+		}
+		if c == "arcfour" {
+			hasArcfour = true
 		}
 	}
 	if !has3DES {
 		t.Errorf("expected 3des-cbc in legacy config, ciphers: %v", cfgLegacy.Config.Ciphers)
+	}
+	if !hasArcfour {
+		t.Errorf("expected arcfour in legacy config, ciphers: %v", cfgLegacy.Config.Ciphers)
+	}
+	hasDHGEX1 := false
+	hasDSA := false
+	for _, k := range cfgLegacy.Config.KeyExchanges {
+		if k == "diffie-hellman-group-exchange-sha1" {
+			hasDHGEX1 = true
+		}
+	}
+	for _, hk := range cfgLegacy.HostKeyAlgorithms {
+		if hk == "ssh-dss" {
+			hasDSA = true
+		}
+	}
+	if !hasDHGEX1 {
+		t.Errorf("expected diffie-hellman-group-exchange-sha1 in legacy config, kex: %v", cfgLegacy.Config.KeyExchanges)
+	}
+	if !hasDSA {
+		t.Errorf("expected ssh-dss in legacy host keys, got: %v", cfgLegacy.HostKeyAlgorithms)
 	}
 }
 
@@ -439,6 +482,64 @@ func TestKnownHostsCallbackAcceptNew(t *testing.T) {
 	err = cb("127.0.0.1:22", addr, pub)
 	if err != nil {
 		t.Fatalf("expected known key to be accepted: %v", err)
+	}
+}
+
+func TestKnownHostsCallbackUpdate(t *testing.T) {
+	_, priv1, _ := ed25519.GenerateKey(rand.Reader)
+	signer1, _ := ssh.NewSignerFromKey(priv1)
+	pub1 := signer1.PublicKey()
+
+	_, priv2, _ := ed25519.GenerateKey(rand.Reader)
+	signer2, _ := ssh.NewSignerFromKey(priv2)
+	pub2 := signer2.PublicKey()
+
+	f, _ := os.CreateTemp("", "known_hosts_update")
+	defer os.Remove(f.Name())
+	f.Close()
+
+	addr := &net.TCPAddr{IP: net.ParseIP("192.168.1.50"), Port: 22}
+
+	// 1. Initial write with AcceptNew
+	cbAcceptNew, err := KnownHostsCallback(f.Name(), PolicyAcceptNew)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if err := cbAcceptNew("192.168.1.50:22", addr, pub1); err != nil {
+		t.Fatalf("accept-new failed on initial key: %v", err)
+	}
+
+	// 2. AcceptNew must REJECT changed key pub2
+	cbAcceptNew2, _ := KnownHostsCallback(f.Name(), PolicyAcceptNew)
+	if err := cbAcceptNew2("192.168.1.50:22", addr, pub2); err == nil {
+		t.Fatalf("expected accept-new to reject mismatched key, got nil")
+	}
+
+	// 3. Strict must REJECT changed key pub2
+	cbStrict, _ := KnownHostsCallback(f.Name(), PolicyStrict)
+	if err := cbStrict("192.168.1.50:22", addr, pub2); err == nil {
+		t.Fatalf("expected strict to reject mismatched key, got nil")
+	}
+
+	// 4. Update policy must ACCEPT changed key pub2 and replace pub1 in file
+	cbUpdate, err := KnownHostsCallback(f.Name(), PolicyUpdate)
+	if err != nil {
+		t.Fatalf("unexpected err for update policy: %v", err)
+	}
+	if err := cbUpdate("192.168.1.50:22", addr, pub2); err != nil {
+		t.Fatalf("expected update policy to succeed and replace mismatched key, got: %v", err)
+	}
+
+	// 5. Verify with Strict policy that pub2 is now the recognized key and pub1 is rejected
+	cbStrictAfter, err := KnownHostsCallback(f.Name(), PolicyStrict)
+	if err != nil {
+		t.Fatalf("failed to create strict callback after update: %v", err)
+	}
+	if err := cbStrictAfter("192.168.1.50:22", addr, pub2); err != nil {
+		t.Fatalf("expected new key pub2 to be valid under strict policy after update: %v", err)
+	}
+	if err := cbStrictAfter("192.168.1.50:22", addr, pub1); err == nil {
+		t.Fatalf("expected old key pub1 to be rejected under strict policy after update")
 	}
 }
 

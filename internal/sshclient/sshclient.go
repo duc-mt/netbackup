@@ -15,6 +15,7 @@
 package sshclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -97,8 +98,10 @@ var ErrNoHostKeyCallback = errors.New("sshclient: Options.HostKeyCallback is req
 type KnownHostsPolicy string
 
 const (
-	PolicyStrict    KnownHostsPolicy = "strict"     // reject unknown keys
-	PolicyAcceptNew KnownHostsPolicy = "accept-new" // add unknown keys to the known_hosts file
+	PolicyStrict    KnownHostsPolicy = "strict"     // reject unknown or changed keys
+	PolicyAcceptNew KnownHostsPolicy = "accept-new" // add unknown keys, reject changed keys
+	PolicyUpdate    KnownHostsPolicy = "update"     // add unknown keys, automatically remove mismatched keys and learn new keys
+	PolicyReplace   KnownHostsPolicy = "replace"    // alias for update
 )
 
 // DefaultKnownHostsFile returns the default user OpenSSH known_hosts path
@@ -155,14 +158,14 @@ func ExpandHome(path string) string {
 // file and enforces the given policy (strict or accept-new). If path points to
 // the default user known_hosts file, system-wide known_hosts files are also checked as read-only fallbacks.
 func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallback, error) {
-	if policy != PolicyStrict && policy != PolicyAcceptNew {
+	if policy != PolicyStrict && policy != PolicyAcceptNew && policy != PolicyUpdate && policy != PolicyReplace {
 		return nil, fmt.Errorf("invalid known_hosts policy: %q", policy)
 	}
 
 	path = ExpandHome(path)
 
-	// In accept-new mode, ensure user file and its directory exist
-	if policy == PolicyAcceptNew {
+	// In accept-new or update mode, ensure user file and its directory exist
+	if policy == PolicyAcceptNew || policy == PolicyUpdate || policy == PolicyReplace {
 		if err := ensureFile(path); err != nil {
 			return nil, err
 		}
@@ -202,6 +205,20 @@ func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallba
 
 	var mu sync.Mutex // protects concurrent writes to the known_hosts file
 
+	reloadChecker := func() {
+		updatedFiles := []string{path}
+		if filepath.Clean(path) == filepath.Clean(defUser) {
+			for _, sysFile := range SystemKnownHostsFiles() {
+				if filepath.Clean(sysFile) != filepath.Clean(path) {
+					updatedFiles = append(updatedFiles, sysFile)
+				}
+			}
+		}
+		if c, err := knownhosts.New(updatedFiles...); err == nil {
+			checker = c
+		}
+	}
+
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		err := checker(hostname, remote, key)
 		if err == nil {
@@ -209,48 +226,134 @@ func KnownHostsCallback(path string, policy KnownHostsPolicy) (ssh.HostKeyCallba
 		}
 
 		var keyErr *knownhosts.KeyError
-		if errors.As(err, &keyErr) && len(keyErr.Want) == 0 {
-			// The key is completely unknown
-			if policy == PolicyAcceptNew {
+		if errors.As(err, &keyErr) {
+			if len(keyErr.Want) == 0 {
+				// The key is completely unknown
+				if policy == PolicyAcceptNew || policy == PolicyUpdate || policy == PolicyReplace {
+					mu.Lock()
+					defer mu.Unlock()
+
+					// Re-check inside the lock in case another goroutine or process just recorded it
+					if isHostKeyRecorded(path, hostname, remote, key) {
+						return nil
+					}
+
+					f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+					if err != nil {
+						return fmt.Errorf("failed to open known_hosts to accept new key: %w", err)
+					}
+					defer f.Close()
+
+					line := knownhosts.Line([]string{hostname}, key)
+					if _, err := f.WriteString(line + "\n"); err != nil {
+						return fmt.Errorf("failed to write new key to known_hosts: %w", err)
+					}
+
+					reloadChecker()
+					return nil
+				}
+				return fmt.Errorf("host key verification failed: %s not found in known_hosts (policy=%s)", hostname, policy)
+			}
+
+			// Key mismatch (remote host identification changed)
+			if policy == PolicyUpdate || policy == PolicyReplace {
 				mu.Lock()
 				defer mu.Unlock()
 
-				// Re-check inside the lock in case another goroutine or process just recorded it
+				// Re-check inside the lock in case another goroutine already updated it
 				if isHostKeyRecorded(path, hostname, remote, key) {
 					return nil
 				}
 
-				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
-				if err != nil {
-					return fmt.Errorf("failed to open known_hosts to accept new key: %w", err)
-				}
-				defer f.Close()
-
-				line := knownhosts.Line([]string{hostname}, key)
-				if _, err := f.WriteString(line + "\n"); err != nil {
-					return fmt.Errorf("failed to write new key to known_hosts: %w", err)
-				}
-
-				// Re-initialize checker so subsequent connections in this run use the updated file
-				updatedFiles := []string{path}
-				if filepath.Clean(path) == filepath.Clean(defUser) {
-					for _, sysFile := range SystemKnownHostsFiles() {
-						if filepath.Clean(sysFile) != filepath.Clean(path) {
-							updatedFiles = append(updatedFiles, sysFile)
-						}
+				linesToRemove := make(map[int]bool)
+				for _, w := range keyErr.Want {
+					if filepath.Clean(w.Filename) == filepath.Clean(path) && w.Line > 0 {
+						linesToRemove[w.Line] = true
 					}
 				}
-				if c, err := knownhosts.New(updatedFiles...); err == nil {
-					checker = c
+
+				if err := removeAndReplaceHostKey(path, linesToRemove, hostname, key); err != nil {
+					return fmt.Errorf("updating known_hosts for %s: %w", hostname, err)
 				}
+				fmt.Fprintf(os.Stderr, "NOTICE: updated known_hosts entry for %s (replaced mismatched key)\n", hostname)
+
+				reloadChecker()
 				return nil
 			}
-			return fmt.Errorf("host key verification failed: %s not found in known_hosts (policy=%s)", hostname, policy)
+
+			return fmt.Errorf("host key verification failed for %s: %w", hostname, err)
 		}
 
-		// Key mismatch (mitm or changed key)
-		return fmt.Errorf("host key verification failed for %s: %w", hostname, err)
+		return err
 	}, nil
+}
+
+// removeAndReplaceHostKey removes lines matching lineNums or hostname/address from path,
+// and appends a new entry for hostname with newKey.
+func removeAndReplaceHostKey(path string, lineNums map[int]bool, hostname string, newKey ssh.PublicKey) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	var remainingLines []string
+	curLine := 0
+
+	hostOnly, port, splitErr := net.SplitHostPort(hostname)
+	if splitErr != nil {
+		hostOnly = hostname
+		port = "22"
+	}
+
+	for scanner.Scan() {
+		curLine++
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		// 1. If line number matched the exact Want line from knownhosts.New, drop it
+		if lineNums[curLine] {
+			continue
+		}
+
+		// 2. Also check if unhashed line starts with this hostname or IP
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "@") && !strings.HasPrefix(trimmed, "|") {
+			fields := strings.Fields(trimmed)
+			if len(fields) >= 2 {
+				hosts := strings.Split(fields[0], ",")
+				matched := false
+				for _, h := range hosts {
+					if h == hostname || (port == "22" && h == hostOnly) || h == "["+hostOnly+"]:"+port {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					continue
+				}
+			}
+		}
+
+		remainingLines = append(remainingLines, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Append the new host key line
+	newLine := knownhosts.Line([]string{hostname}, newKey)
+	remainingLines = append(remainingLines, newLine)
+
+	out := strings.Join(remainingLines, "\n") + "\n"
+	tmp := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
+	if err := os.WriteFile(tmp, []byte(out), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(path)
+		return os.Rename(tmp, path)
+	}
+	return nil
 }
 
 func isHostKeyRecorded(path string, hostname string, remote net.Addr, key ssh.PublicKey) bool {
@@ -490,6 +593,9 @@ func buildClientConfig(auth AuthOptions, hkCb ssh.HostKeyCallback, opts Options)
 	legacyCiphers := []string{
 		"aes128-cbc",
 		"3des-cbc",
+		"arcfour",
+		"arcfour128",
+		"arcfour256",
 	}
 
 	modernKex := []string{
@@ -499,9 +605,12 @@ func buildClientConfig(auth AuthOptions, hkCb ssh.HostKeyCallback, opts Options)
 		"ecdh-sha2-nistp384",
 		"ecdh-sha2-nistp521",
 		"diffie-hellman-group14-sha256",
+		"diffie-hellman-group16-sha512",
+		"diffie-hellman-group-exchange-sha256",
 	}
 	legacyKex := []string{
 		"diffie-hellman-group14-sha1",
+		"diffie-hellman-group-exchange-sha1",
 		"diffie-hellman-group1-sha1",
 	}
 

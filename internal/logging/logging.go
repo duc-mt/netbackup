@@ -227,6 +227,31 @@ func splitLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
+// Progress logs real-time status as each device completes during a backup run.
+func (l *Logger) Progress(completed, total int, r backup.Result) {
+	if r.Success {
+		if r.DryRun {
+			l.Info("[%d/%d] OK      %-20s (%s) [DRY-RUN] [%s]", completed, total, r.Device.Hostname, r.Device.Address, r.Duration.Round(time.Millisecond))
+			return
+		}
+		status := "SAVED"
+		if r.Unchanged {
+			status = "UNCHANGED"
+			if r.VolatileOnly {
+				status = "UNCHANGED (volatile lines only)"
+			}
+		} else if r.HasDiff || r.DiffAdded > 0 || r.DiffRemoved > 0 {
+			status = fmt.Sprintf("SAVED (+%d/-%d)", r.DiffAdded, r.DiffRemoved)
+		}
+		if r.Risk.Level != backup.RiskNone {
+			status += " RISK=" + riskLabel(r.Risk)
+		}
+		l.Info("[%d/%d] OK      %-20s (%s) [%s] -> %s [%s]", completed, total, r.Device.Hostname, r.Device.Address, status, r.OutputPath, r.Duration.Round(time.Millisecond))
+		return
+	}
+	l.Error("[%d/%d] FAILED  %-20s (%s) category=%s detail=%v [%s]", completed, total, r.Device.Hostname, r.Device.Address, r.Category, r.Err, r.Duration.Round(time.Millisecond))
+}
+
 // Summary prints a per-device outcome line for every result plus roll-up
 // counts by failure category, and returns the number of failures so the
 // caller can set a meaningful process exit code.
