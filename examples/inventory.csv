@@ -2,7 +2,7 @@ hostname,address,port,vendor,credential_group,jump_host
 # One device per line. port, vendor, credential_group, and jump_host are optional:
 #   - port defaults to 22
 #   - vendor defaults to "generic" (runs "show running-config")
-#   - credential_group defaults to "default" (uses NETBACKUP_USERNAME/PASSWORD)
+#   - credential_group defaults to "default" (maps to NETBACKUP_USERNAME/PASSWORD or KEY_FILE in .env)
 #   - jump_host: leave blank for direct connections; set to a bastion name or
 #     host[:port] for devices reachable only via a management server / jump host.
 #     Hybrid mode: -jump-host flag sets the global default; per-device column overrides it.

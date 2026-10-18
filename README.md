@@ -65,8 +65,7 @@ Copy the single executable onto any machine (online or air-gapped). Run `netback
    latest backup; skips saving redundant duplicate files by default.
 4. **Backup Retention & Rotation**: Automatically prunes older backups per
    device based on count or age.
-5. **Multi-Site & Per-Group Credentials**: Resolves per-site or per-vendor
-   credentials from environment variables with graceful fallback to defaults.
+5. **Multi-Site & Per-Group Credentials**: Resolves passwords or SSH private keys per site/device group from `.env` or environment variables with graceful fallback to defaults.
 6. **Thread-Safe & Fault-Isolated**: Bounded worker pool concurrency with
    per-goroutine panic recovery.
 7. **Smart / Semantic Diff**: Ignores volatile lines (clock stamps, "last
