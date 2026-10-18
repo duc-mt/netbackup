@@ -192,7 +192,7 @@ To validate SSH connectivity and authentication without executing commands or wr
 | `-retry-delay`    | `2s`    | Delay between retries per device |
 | `-dial-jitter`    | `100ms` | Randomized dial jitter delay applied before connecting to avoid CPU spikes (`0` to disable) |
 | `-known-hosts`    | `""`    | Path to OpenSSH `known_hosts` (defaults to `~/.ssh/known_hosts` or `%USERPROFILE%\.ssh\known_hosts`) |
-| `-known-hosts-policy` | `strict` | Policy for host keys: `strict` (reject unknown/changed), `accept-new` (trust on first contact), or `update` (learn new and replace changed keys) |
+| `-known-hosts-policy` | `update` | Policy for host keys: `update` (learn new and replace changed keys), `accept-new` (trust on first contact), or `strict` (reject unknown/changed) |
 | `-update-known-hosts` | `false` | Automatically remove mismatched existing keys and learn new keys in `known_hosts` (alias for `-known-hosts-policy update`) |
 | `-insecure-ignore-host-key` | `false` | DANGEROUS: skip host key verification entirely (vulnerable to MITM) |
 | `-legacy-algorithms` | `true` | Allow automatic negotiation of legacy SSH algorithms (3des-cbc, dh-group1/14-sha1, dh-gex-sha1, ssh-dss) as fallback for older network gear (`-legacy-algorithms=false` to restrict to modern-only) |
@@ -210,9 +210,9 @@ Netbackup verifies device host keys against standard OpenSSH `known_hosts` files
   - **Linux / macOS**: Reads `~/.ssh/known_hosts` (and `/etc/ssh/ssh_known_hosts` / `/etc/ssh/ssh_known_hosts2` if present).
   - **Windows**: Reads `%USERPROFILE%\.ssh\known_hosts` (and `%ProgramData%\ssh\ssh_known_hosts` if present).
   - Supports tilde (`~`) expansion in `-known-hosts`.
-- **First contact enrollment**: Run with `-known-hosts-policy accept-new` to enroll unseen devices. Discovered keys are safely appended only to the user's personal known_hosts file, preventing duplicates. A changed key is rejected.
-- **Automatic key update / rotation**: Run with `-update-known-hosts` (or `-known-hosts-policy update`) to automatically purge mismatched/stale keys from `known_hosts` and record the newly presented host key (e.g. after switch hardware replacement or key regeneration).
-- **Strict enforcement**: By default (`-known-hosts-policy strict`), unrecorded devices or changed host keys are rejected to protect against MITM.
+- **Automatic key update / rotation**: By default (`-known-hosts-policy update`), netbackup automatically learns new devices and updates replaced/mismatched keys in `known_hosts` (e.g. after switch hardware replacement, re-imaging, or key regeneration).
+- **First contact enrollment**: Set `-known-hosts-policy accept-new` to trust unseen devices on first contact only, rejecting any changed keys.
+- **Strict enforcement**: Set `-known-hosts-policy strict` to reject any unknown devices or changed host keys to protect against MITM.
 
 ### Run Summary Table
 

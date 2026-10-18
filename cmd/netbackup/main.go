@@ -128,7 +128,7 @@ func parseFlags() cliOptions {
 	flag.IntVar(&opts.retentionCount, "retention-count", 0, "maximum number of recent backups to keep per device (0 to disable)")
 	flag.IntVar(&opts.retentionDays, "retention-days", 0, "prune backups older than N days per device (0 to disable)")
 	flag.StringVar(&opts.knownHostsPath, "known-hosts", "", "path to an OpenSSH known_hosts file used to verify device host keys (defaults to ~/.ssh/known_hosts or %USERPROFILE%\\.ssh\\known_hosts)")
-	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "strict", "policy for host keys: 'strict' (reject unknown/changed), 'accept-new' (learn new), or 'update' (learn new and replace changed keys)")
+	flag.StringVar(&opts.knownHostsPolicy, "known-hosts-policy", "update", "policy for host keys: 'strict' (reject unknown/changed), 'accept-new' (learn new), or 'update' (learn new and replace changed keys)")
 	flag.BoolVar(&opts.updateKnownHosts, "update-known-hosts", false, "automatically remove mismatched existing keys and learn new keys in known_hosts (alias for -known-hosts-policy update)")
 	flag.BoolVar(&opts.updateKnownHosts, "replace-host-keys", false, "alias for -update-known-hosts")
 	flag.BoolVar(&opts.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "DANGEROUS: skip host key verification entirely instead of checking -known-hosts (exposes connections to MITM)")

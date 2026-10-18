@@ -299,8 +299,8 @@ func TestCLIOptionsDefaults(t *testing.T) {
 	if opts.updateKnownHosts {
 		t.Errorf("updateKnownHosts should default to false, got %v", opts.updateKnownHosts)
 	}
-	if opts.knownHostsPolicy != "strict" {
-		t.Errorf("knownHostsPolicy should default to strict, got %s", opts.knownHostsPolicy)
+	if opts.knownHostsPolicy != "update" {
+		t.Errorf("knownHostsPolicy should default to update, got %s", opts.knownHostsPolicy)
 	}
 	if !opts.legacyAlgorithms {
 		t.Errorf("legacyAlgorithms should default to true, got %v", opts.legacyAlgorithms)
