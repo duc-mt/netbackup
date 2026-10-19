@@ -247,6 +247,7 @@ sides before the previous and the new configuration are compared:
 |---|---|
 | Cisco IOS / Cisco SB / Cisco ASA / Arista / Huawei / Aruba / Ruijie | `! Last configuration change at ...`, `! NVRAM config last updated at ...`, `! No configuration change since last restart`, `! Time: ...`, `Current configuration : N bytes`, `Building configuration...`, `ntp clock-period N`, Huawei `!Last configuration was updated/saved at ...` |
 | Junos | `## Last changed: ...`, `## Last commit: ...` |
+| Cisco ASA | `: Written by <user> at <time> ...` header line |
 | MikroTik RouterOS | `/export` header lines `# <date> <time> by RouterOS <version>` (v6 and v7 date formats) and `# software id = ...` |
 | VyOS | `// Warning: Do not remove ...`, `// vyos-config-version ...`, `// Release version ...` (and the `/* */` forms) |
 | VyOS / pfSense / Gaia | `# Generated/Exported/Date/Timestamp/Uptime ...` comment banners |
@@ -389,6 +390,11 @@ The completeness check looks for a line beginning with `end` or `exit` (Cisco
 SB), a `: end` line or a line beginning with `end` (Cisco ASA), or a line
 beginning with `return` (Huawei / H3C / Comware). RouterOS exports have no end
 marker, so only empty output is rejected there.
+
+With `-redact=true`, RouterOS `password=`, `secret=`, `passphrase=`,
+`*-pre-shared-key=`, `tcp-md5-key=`, `private-key=` and similar parameters are
+masked, as is the ASA `passwd` hash. SNMP community strings on RouterOS are
+plain `name=` values and are not masked.
 
 
 ## Development, Maintenance & Expansion

@@ -97,6 +97,18 @@ var commonPatterns = []patternRule{
 		re:   regexp.MustCompile(`(?i)(?m)(^\s*set\s+community-name\s+)"?[^"\r\n]+"?`),
 		repl: `${1}"<REDACTED>"`,
 	},
+	// MikroTik RouterOS key=value secrets (PPP / VPN / Wi-Fi / SNMP / RADIUS /
+	// BGP / WireGuard ...). The value is either a quoted string (with \"
+	// escapes) or a bare token; an empty value ("") is not a secret and is kept.
+	{
+		re:   regexp.MustCompile(`(?i)(?m)(\b(?:password|secret|passphrase|(?:wpa2?-|private-)?pre-shared-key|preshared-key|authentication-password|encryption-password|authentication-key|tcp-md5-key|private-key|management-protection-key)=)(?:"(?:[^"\\\r\n]|\\.)+"|[^"\s]\S*)`),
+		repl: `${1}"<REDACTED>"`,
+	},
+	// Cisco ASA login (telnet/ssh line) password hash: "passwd <hash> encrypted"
+	{
+		re:   regexp.MustCompile(`(?i)(?m)(^\s*passwd)\s+\S+`),
+		repl: "${1} <REDACTED>",
+	},
 }
 
 // Config processes raw configuration text and replaces recognized sensitive

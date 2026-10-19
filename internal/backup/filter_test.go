@@ -342,3 +342,39 @@ func TestVolatileFilterNewVendorsAreScoped(t *testing.T) {
 		}
 	}
 }
+
+func TestVolatileFilterCiscoASAWrittenBy(t *testing.T) {
+	cfg := strings.Join([]string{
+		": Saved",
+		":",
+		": Written by enable_15 at 09:41:07.589 UTC Mon Oct 19 2026",
+		"!",
+		"ASA Version 9.12(4)",
+		"hostname asa1",
+		": end",
+	}, "\n")
+	want := strings.Join([]string{
+		": Saved",
+		":",
+		"!",
+		"ASA Version 9.12(4)",
+		"hostname asa1",
+		": end",
+	}, "\n")
+
+	f := DefaultVolatileFilter()
+	for _, vendorName := range []string{"cisco_asa", "asa", "ftd"} {
+		if got := f.Apply(vendorName, cfg); got != want {
+			t.Errorf("vendor %q: Apply = %q, want %q", vendorName, got, want)
+		}
+	}
+	// The stamp is ASA specific, and the other ": " header lines are static.
+	for _, vendorName := range []string{"cisco_ios", "cisco_sb", "mikrotik"} {
+		if got := f.Apply(vendorName, ": Written by admin at 09:41:07.589 UTC Mon Oct 19 2026"); got == "" {
+			t.Errorf("ASA rule leaked into %s", vendorName)
+		}
+	}
+	if f.IsVolatile("cisco_asa", ": Serial Number: 9A1B2C3D4E5") || f.IsVolatile("cisco_asa", ": Hardware:   ASA5516, 8192 MB RAM") {
+		t.Error("static ASA header lines must not be volatile")
+	}
+}

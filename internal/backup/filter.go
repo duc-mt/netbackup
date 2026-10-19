@@ -53,6 +53,10 @@ var builtinVolatileSpecs = []volatileSpec{
 	{"ntp-clock-period", bangCommentVendors, `(?i)^\s*ntp clock-period\s+\d+\s*$`},
 	{"huawei-last-updated", []string{"huawei_vrp", "generic"}, `(?i)^\s*!\s*last configuration was (updated|saved) at\b`},
 
+	// Cisco ASA: the ":" comment header carries the user and time of the
+	// "show running-config" ("Written by enable_15 at 09:41:07.589 UTC ...").
+	{"asa-written-by", []string{"cisco_asa"}, `(?i)^\s*:\s*written by\s+\S+\s+at\b`},
+
 	// MikroTik RouterOS: the "/export" header carries the export time and the
 	// RouterOS version ("# 2026-10-19 09:41:00 by RouterOS 7.16" in v7,
 	// "# oct/19/2026 09:41:00 by RouterOS 6.49" in v6) plus the license id.

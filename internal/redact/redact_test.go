@@ -102,3 +102,103 @@ MIIEowIBAAKCAQEA0Y...
 		t.Errorf("expected <REDACTED> marker in output, got:\n%s", redacted)
 	}
 }
+
+func TestRedactMikroTik(t *testing.T) {
+	input := strings.Join([]string{
+		"/ppp secret",
+		"add name=vpnuser password=PppSecretPass123 profile=default service=l2tp",
+		"/interface wireless security-profiles",
+		`set [ find default=yes ] authentication-types=wpa2-psk mode=dynamic-keys wpa2-pre-shared-key=WifiWpa2Secret wpa-pre-shared-key="Wifi Wpa Secret With Spaces" supplicant-identity=MikroTik`,
+		"/ip ipsec identity",
+		"add peer=peer1 secret=IpsecSecret!42",
+		"/interface eoip",
+		"add ipsec-secret=EoipIpsecSecret name=eoip1 remote-address=10.9.9.9",
+		"/snmp community",
+		"set [ find default=yes ] authentication-password=SnmpAuthPass encryption-password=SnmpPrivPass security=private",
+		"/radius",
+		"add address=10.0.0.5 secret=RadiusSharedSecret service=login",
+		"/routing bgp peer",
+		"add name=p1 remote-address=10.1.1.1 remote-as=65001 tcp-md5-key=BgpMd5Key",
+		"/interface wireguard",
+		`add listen-port=13231 name=wg1 private-key="WgPrivateKeyBase64+/=="`,
+		"/interface wireguard peers",
+		`add allowed-address=10.9.0.2/32 interface=wg1 preshared-key="WgPresharedKey==" public-key="WgPublicKey=="`,
+		"/interface wifi security",
+		"add authentication-types=wpa2-psk name=sec1 passphrase=WifiPassphrase99",
+		"/tool e-mail",
+		"set password=MailPass user=alert@example.com",
+		"/interface ovpn-client",
+		`add connect-to=1.2.3.4 name=ovpn1 password="Ovpn Pass \"quoted\" tail" user=vpn1`,
+		`add connect-to=1.2.3.5 name=ovpn2 password="" user=vpn2`,
+		"/system identity",
+		"set name=rtr1",
+	}, "\n")
+
+	got := Config(input)
+
+	for _, secret := range []string{
+		"PppSecretPass123", "WifiWpa2Secret", "Wifi Wpa Secret With Spaces", "IpsecSecret!42",
+		"EoipIpsecSecret", "SnmpAuthPass", "SnmpPrivPass", "RadiusSharedSecret", "BgpMd5Key",
+		"WgPrivateKeyBase64", "WgPresharedKey", "WifiPassphrase99", "MailPass", "Ovpn Pass", "tail",
+	} {
+		if strings.Contains(got, secret) {
+			t.Errorf("secret %q leaked:\n%s", secret, got)
+		}
+	}
+
+	// Everything that is not a secret must survive, including the rest of each line.
+	for _, keep := range []string{
+		"add name=vpnuser password=\"<REDACTED>\" profile=default service=l2tp",
+		"authentication-types=wpa2-psk mode=dynamic-keys",
+		"supplicant-identity=MikroTik",
+		"add peer=peer1 secret=\"<REDACTED>\"",
+		"name=eoip1 remote-address=10.9.9.9",
+		"security=private",
+		"remote-as=65001",
+		"listen-port=13231 name=wg1",
+		`public-key="WgPublicKey=="`,
+		"user=alert@example.com",
+		`user=vpn1`,
+		`password="" user=vpn2`, // an empty password is not a secret and is left alone
+		"/ppp secret",           // menu path, not a parameter
+		"set name=rtr1",
+	} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("expected %q to be preserved, got:\n%s", keep, got)
+		}
+	}
+}
+
+func TestRedactCiscoASA(t *testing.T) {
+	input := strings.Join([]string{
+		": Saved",
+		"ASA Version 9.12(4)",
+		"hostname asa1",
+		"passwd 2KFQnbNIdI.2KYOU encrypted",
+		"enable password 8Ry2YjIyt7RRXU24 encrypted",
+		"username admin password $sha512$5000$abcDEF123== pbkdf2 privilege 15",
+		"ssh version 2",
+		": end",
+	}, "\n")
+
+	got := Config(input)
+
+	for _, secret := range []string{"2KFQnbNIdI.2KYOU", "8Ry2YjIyt7RRXU24", "$sha512$5000$abcDEF123=="} {
+		if strings.Contains(got, secret) {
+			t.Errorf("secret %q leaked:\n%s", secret, got)
+		}
+	}
+	for _, keep := range []string{"passwd <REDACTED> encrypted", "hostname asa1", "ssh version 2", ": end"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("expected %q to be preserved, got:\n%s", keep, got)
+		}
+	}
+}
+
+func TestRedactNewRulesAreIdempotent(t *testing.T) {
+	input := "add name=u password=Secret1 secret=\"two words\"\npasswd abcdef encrypted\n"
+	once := Config(input)
+	if twice := Config(once); twice != once {
+		t.Errorf("redaction is not idempotent:\n once: %q\ntwice: %q", once, twice)
+	}
+}
