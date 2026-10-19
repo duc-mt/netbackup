@@ -22,7 +22,7 @@ import (
 var (
 	// bangCommentVendors emit IOS-style "!" comment headers and share the
 	// same auto-generated clock/size noise.
-	bangCommentVendors = []string{"cisco_ios", "arista", "huawei_vrp", "aruba", "ruijie", "generic"}
+	bangCommentVendors = []string{"cisco_ios", "cisco_sb", "cisco_asa", "arista", "huawei_vrp", "aruba", "ruijie", "generic"}
 
 	// hashCommentVendors are Linux-like platforms whose dumps can carry
 	// "# ..." banners with dates or uptime.
@@ -43,7 +43,7 @@ type volatileSpec struct {
 // comparison. All patterns are RE2 and anchored on the comment syntax of the
 // platform so they cannot swallow real configuration.
 var builtinVolatileSpecs = []volatileSpec{
-	// Cisco IOS / IOS-XE, Arista EOS, Huawei VRP, Aruba, Ruijie.
+	// Cisco IOS / IOS-XE / Small Business / ASA, Arista EOS, Huawei VRP, Aruba, Ruijie.
 	{"ios-last-change", bangCommentVendors, `(?i)^\s*!\s*last configuration change at\b`},
 	{"ios-nvram-updated", bangCommentVendors, `(?i)^\s*!\s*nvram config last updated at\b`},
 	{"ios-no-change-since-restart", bangCommentVendors, `(?i)^\s*!\s*no configuration change since last restart\b`},
@@ -52,6 +52,12 @@ var builtinVolatileSpecs = []volatileSpec{
 	{"ios-building-config", bangCommentVendors, `(?i)^\s*building configuration\.\.\.\s*$`},
 	{"ntp-clock-period", bangCommentVendors, `(?i)^\s*ntp clock-period\s+\d+\s*$`},
 	{"huawei-last-updated", []string{"huawei_vrp", "generic"}, `(?i)^\s*!\s*last configuration was (updated|saved) at\b`},
+
+	// MikroTik RouterOS: the "/export" header carries the export time and the
+	// RouterOS version ("# 2026-10-19 09:41:00 by RouterOS 7.16" in v7,
+	// "# oct/19/2026 09:41:00 by RouterOS 6.49" in v6) plus the license id.
+	{"mikrotik-export-header", []string{"mikrotik"}, `(?i)^\s*#\s+\S+\s+\d{1,2}:\d{2}:\d{2}\s+by routeros\b`},
+	{"mikrotik-software-id", []string{"mikrotik"}, `(?i)^\s*#\s+software id\b`},
 
 	// Juniper Junos.
 	{"junos-last-changed", []string{"juniper_junos"}, `(?i)^\s*##\s*last changed\s*:`},

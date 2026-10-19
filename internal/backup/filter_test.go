@@ -231,3 +231,114 @@ func TestLoadVolatilePatterns(t *testing.T) {
 		t.Error("expected an error for a missing patterns file")
 	}
 }
+
+func TestVolatileFilterCiscoSBAndASA(t *testing.T) {
+	cfg := strings.Join([]string{
+		"Building configuration...",
+		"",
+		"Current configuration : 5123 bytes",
+		"!",
+		"! Last configuration change at 12:00:00 UTC Mon Oct 19 2026 by admin",
+		"! NVRAM config last updated at 12:01:00 UTC Mon Oct 19 2026 by admin",
+		"! No configuration change since last restart",
+		"! Time: Mon Oct 19 12:00:00 2026",
+		"!",
+		": Saved",
+		": Serial Number: 9A1B2C3D4E5",
+		"hostname edge1",
+		"ntp server 10.0.0.1",
+		": end",
+	}, "\n")
+
+	f := DefaultVolatileFilter()
+	for _, vendorName := range []string{"cisco_sb", "cisco_sg", "sg350", "cbs350", "ciscosb", "cisco_asa", "asa", "cisco_ftd", "ftd"} {
+		got := f.Apply(vendorName, cfg)
+		for _, noisy := range []string{
+			"Building configuration", "Current configuration", "Last configuration change",
+			"NVRAM config", "No configuration change", "! Time:",
+		} {
+			if strings.Contains(got, noisy) {
+				t.Errorf("vendor %q: volatile line %q survived:\n%s", vendorName, noisy, got)
+			}
+		}
+		for _, real := range []string{": Saved", ": Serial Number: 9A1B2C3D4E5", "hostname edge1", "ntp server 10.0.0.1", ": end"} {
+			if !strings.Contains(got, real) {
+				t.Errorf("vendor %q: real line %q was removed:\n%s", vendorName, real, got)
+			}
+		}
+	}
+}
+
+func TestVolatileFilterMikroTik(t *testing.T) {
+	f := DefaultVolatileFilter()
+	body := "/interface bridge\nadd name=bridge1\n/ip address\nadd address=192.168.88.1/24 interface=bridge1 network=192.168.88.0\n/system identity\nset name=rtr1"
+	tests := []struct {
+		name   string
+		vendor string
+		config string
+		want   string
+	}{
+		{
+			name:   "RouterOS 6 header (mon/dd/yyyy)",
+			vendor: "mikrotik",
+			config: "# jan/02/1970 00:00:00 by RouterOS 6.49.10\n# software id = ABCD-1234\n#\n# model = RB4011iGS+\n# serial number = ABC123456789\n" + body,
+			want:   "#\n# model = RB4011iGS+\n# serial number = ABC123456789\n" + body,
+		},
+		{
+			name:   "RouterOS 7 header (ISO date)",
+			vendor: "routeros",
+			config: "# 2026-10-19 09:41:00 by RouterOS 7.16.1\n# software id = ABCD-1234\n#\n" + body,
+			want:   "#\n" + body,
+		},
+		{
+			name:   "CRLF line endings and alias",
+			vendor: "ros",
+			config: "# 2026-10-19 09:41:00 by RouterOS 7.16.1\r\n# software id = ABCD-1234\r\n" + body,
+			want:   body,
+		},
+		{
+			name:   "lookalike lines are kept",
+			vendor: "mikrotik",
+			config: "# managed by RouterOS team\n# software identifier is not a header\n/system script add name=s source=\"# software id check\"",
+			want:   "# managed by RouterOS team\n# software identifier is not a header\n/system script add name=s source=\"# software id check\"",
+		},
+	}
+	for _, tt := range tests {
+		if got := f.Apply(tt.vendor, tt.config); got != tt.want {
+			t.Errorf("%s: Apply = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+
+	if !f.IsVolatile("mikrotik", "# 2026-10-19 09:41:00 by RouterOS 7.16.1\r") {
+		t.Error("expected RouterOS export header (with CR) to be volatile")
+	}
+	if f.IsVolatile("mikrotik", "/system identity") {
+		t.Error("a RouterOS menu line must not be volatile")
+	}
+}
+
+func TestVolatileFilterNewVendorsAreScoped(t *testing.T) {
+	f := DefaultVolatileFilter()
+
+	// RouterOS export headers must not be stripped from other platforms ...
+	for _, line := range []string{"# 2026-10-19 09:41:00 by RouterOS 7.16.1", "# software id = ABCD-1234"} {
+		for _, vendorName := range []string{"cisco_ios", "cisco_sb", "cisco_asa", "vyos"} {
+			if got := f.Apply(vendorName, line); got != line {
+				t.Errorf("MikroTik rule leaked into %s: %q", vendorName, got)
+			}
+		}
+	}
+	// ... and IOS-style "!" stamps do not apply to RouterOS, which has no such headers.
+	stamp := "! Last configuration change at 12:00:00 UTC Mon Oct 19 2026"
+	if got := f.Apply("mikrotik", stamp); got != stamp {
+		t.Errorf("IOS rule leaked into mikrotik: %q", got)
+	}
+	// Junos and hash-banner rules stay away from the new Cisco platforms.
+	for _, vendorName := range []string{"cisco_sb", "cisco_asa"} {
+		for _, line := range []string{"## Last changed: 2026-10-19 12:00:00 UTC", "# uptime: 1"} {
+			if got := f.Apply(vendorName, line); got != line {
+				t.Errorf("rule leaked into %s: %q", vendorName, got)
+			}
+		}
+	}
+}

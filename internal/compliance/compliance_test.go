@@ -426,3 +426,157 @@ func TestLoadKeepsGoodRulesDespiteBadOnes(t *testing.T) {
 		t.Errorf("errs = %v, want one error for the bad regex", errs)
 	}
 }
+
+func hasDrift(rep Report, kind Kind, ruleContains string) bool {
+	for _, d := range rep.Drifts {
+		if d.Kind == kind && strings.Contains(d.Rule, ruleContains) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNewVendorSectionsResolve(t *testing.T) {
+	text := strings.Join([]string{
+		"[sg350]", "sntp server 10.0.0.1",
+		"[asa]", "ssh version 2",
+		"[ftd]", "ssh version 2",
+		"[routeros]", "set telnet disabled=yes",
+		"[h3c]", "sysname r1",
+	}, "\n")
+
+	sections, errs := ParseRules(text, "common")
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	want := map[string]int{"cisco_sb": 1, "cisco_asa": 2, "mikrotik": 1, "huawei_vrp": 1}
+	for key, n := range want {
+		if got := len(sections[key]); got != n {
+			t.Errorf("section %q has %d rules, want %d", key, got, n)
+		}
+	}
+	if len(sections) != len(want) {
+		t.Errorf("got %d sections, want %d: %v", len(sections), len(want), sections)
+	}
+}
+
+func TestNewVendorGoldenFilesApplyByAlias(t *testing.T) {
+	dir := t.TempDir()
+	writeGolden(t, dir, "common.golden", "re: (?i)\\bbanner\\b\n")
+	writeGolden(t, dir, "cisco.golden", "service password-encryption\n")
+	writeGolden(t, dir, "asa.golden", "ssh version 2\n")
+	writeGolden(t, dir, "sg350.golden", "sntp server 10.0.0.1\n")
+	writeGolden(t, dir, "routeros.golden", "set telnet disabled=yes\n")
+	writeGolden(t, dir, "huawei.golden", "sysname r1\n")
+
+	b, errs := Load(dir, "")
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	tests := []struct {
+		vendor string
+		config string
+	}{
+		{"cisco_asa", "banner login x\nssh version 2\n"},
+		{"asa", "banner login x\nssh version 2\n"},
+		{"cisco_ftd", "banner login x\nssh version 2\n"},
+		{"cisco_sb", "banner login x\nsntp server 10.0.0.1\n"},
+		{"cbs350", "banner login x\nsntp server 10.0.0.1\n"},
+		{"sg300", "banner login x\nsntp server 10.0.0.1\n"},
+		{"mikrotik", "banner x\nset telnet disabled=yes\n"},
+		{"ros", "banner x\nset telnet disabled=yes\n"},
+		{"h3c", "banner x\nsysname r1\n"},
+		{"hp_comware", "banner x\nsysname r1\n"},
+		// The IOS baseline still applies to IOS only.
+		{"cisco", "banner login x\nservice password-encryption\n"},
+	}
+	for _, tt := range tests {
+		// Every device gets common (1) plus exactly its own platform's rule (1):
+		// cisco.golden is not inherited by Cisco SB / ASA, whose CLI differs from IOS.
+		rep := b.Check(tt.vendor, tt.config)
+		if !rep.Checked || rep.Rules != 2 {
+			t.Errorf("%s: Checked=%v Rules=%d, want a checked report with 2 rules", tt.vendor, rep.Checked, rep.Rules)
+		}
+		if !rep.Compliant() {
+			t.Errorf("%s: expected compliant, got %v", tt.vendor, rep.DriftMessages())
+		}
+	}
+
+	// A missing platform rule is reported against the right section.
+	if rep := b.Check("sg350", "banner login x\n"); !hasDrift(rep, KindMissing, "sntp server 10.0.0.1") {
+		t.Errorf("sg350.golden rule not enforced on cisco_sb: %v", rep.DriftMessages())
+	}
+	if rep := b.Check("comware", "banner x\n"); !hasDrift(rep, KindMissing, "sysname r1") {
+		t.Errorf("huawei.golden rule not enforced on an H3C/Comware device: %v", rep.DriftMessages())
+	}
+}
+
+func TestShippedGoldenBaselinesCoverNewVendors(t *testing.T) {
+	b, errs := Load("../../examples/golden", "")
+	if len(errs) != 0 {
+		t.Fatalf("shipped golden baselines have errors: %v", errs)
+	}
+	for _, key := range []string{"cisco_ios", "vyos", "cisco_sb", "cisco_asa", "mikrotik"} {
+		if !b.Applies(key) {
+			t.Errorf("no shipped baseline applies to %q", key)
+		}
+	}
+
+	good := map[string]string{
+		"cisco_asa": strings.Join([]string{
+			": Saved", "ASA Version 9.12(4)", "hostname asa1",
+			"banner login Authorized access only",
+			"ntp server 10.0.0.1 source inside",
+			"logging host inside 10.0.0.9",
+			"ssh version 2",
+			"telnet timeout 5",
+			": end",
+		}, "\n"),
+		"cisco_sb": strings.Join([]string{
+			"config-file-header", "sw1", "CLI v1.0", "set system mode switch",
+			"banner login", "hostname sw1",
+			"sntp server 10.0.0.1",
+			"logging host 10.0.0.9",
+			"exit",
+		}, "\n"),
+		"mikrotik": strings.Join([]string{
+			"/system identity", "set name=rtr1",
+			"/system note", `set note="Authorized access only" show-at-login=yes`,
+			"/system ntp client", "set enabled=yes",
+			"/system logging", "add action=memory topics=info",
+			"/ip service",
+			`set telnet address="" disabled=yes port=23`,
+			`set ftp address="" disabled=yes port=21`,
+		}, "\n"),
+	}
+	for vendorKey, cfg := range good {
+		if rep := b.Check(vendorKey, cfg); !rep.Compliant() {
+			t.Errorf("%s: sample config should be compliant, got %v", vendorKey, rep.DriftMessages())
+		}
+	}
+
+	// ASA: ssh version 2 missing and a telnet access line present.
+	asaBad := strings.Replace(good["cisco_asa"], "ssh version 2\n", "telnet 10.0.0.0 255.255.255.0 inside\n", 1)
+	rep := b.Check("asa", asaBad)
+	if !hasDrift(rep, KindMissing, "ssh version 2") || !hasDrift(rep, KindForbidden, "telnet") {
+		t.Errorf("asa: expected missing ssh version 2 + forbidden telnet, got %v", rep.DriftMessages())
+	}
+	if rep := b.Check("asa", strings.Replace(good["cisco_asa"], "telnet timeout 5", "telnet 2001:db8::/32 inside", 1)); !hasDrift(rep, KindForbidden, "telnet") {
+		t.Errorf("asa: IPv6 telnet access line should be forbidden, got %v", rep.DriftMessages())
+	}
+
+	// Cisco SB: telnet server enabled and no SNTP server (SNTP must satisfy the common NTP rule).
+	sbBad := strings.Replace(good["cisco_sb"], "sntp server 10.0.0.1\n", "ip telnet server\n", 1)
+	rep = b.Check("sg350", sbBad)
+	if !hasDrift(rep, KindForbidden, "ip telnet server") || !hasDrift(rep, KindMissing, "server") {
+		t.Errorf("sg350: expected forbidden telnet server + missing sntp server, got %v", rep.DriftMessages())
+	}
+
+	// MikroTik: telnet service left enabled (verbose export form).
+	mtBad := strings.Replace(good["mikrotik"], `set telnet address="" disabled=yes port=23`, `set telnet address="" disabled=no port=23`, 1)
+	rep = b.Check("routeros", mtBad)
+	if len(rep.Drifts) != 1 || !hasDrift(rep, KindMissing, "telnet") {
+		t.Errorf("routeros: expected exactly the telnet drift, got %v", rep.DriftMessages())
+	}
+}

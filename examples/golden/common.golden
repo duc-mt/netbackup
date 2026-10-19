@@ -11,9 +11,9 @@
 # Note: with -redact=true (the default) secrets are stored as <REDACTED>,
 # so write rules against the redacted text.
 
-# Some login banner / MOTD must be configured.
-re: (?i)\b(banner|motd)\b
+# Some login banner / MOTD must be configured (RouterOS keeps it under /system note).
+re: (?i)\b(banner|motd|system note)\b
 
-# Some NTP source and some syslog destination must be configured.
-re: (?i)\bntp\b
+# Some NTP (or SNTP) source and some syslog destination must be configured.
+re: (?i)\bs?ntp\b
 re: (?i)\b(syslog|logging)\b

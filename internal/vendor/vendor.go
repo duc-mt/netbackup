@@ -78,6 +78,29 @@ var Profiles = map[string]Profile{
 		EndMarkers:    []string{"\nend", "\r\nend"},
 		FileExtension: ".cfg",
 	},
+	// Cisco Small Business (SF/SG/CBS) runs a different CLI from IOS: its
+	// running-config closes configuration blocks with "exit", so both "end"
+	// and "exit" are accepted as completion markers.
+	"cisco_sb": {
+		Key:           "cisco_sb",
+		Name:          "Cisco Small Business (SF/SG/CBS)",
+		Interactive:   false,
+		SetupCommands: []string{"terminal datadump"},
+		BackupCommand: "show running-config",
+		EndMarkers:    []string{"\nend", "\r\nend", "\nexit", "\r\nexit"},
+		FileExtension: ".cfg",
+	},
+	// Cisco ASA (and Firepower FTD in ASA mode) terminates the running-config
+	// with a ": end" comment line.
+	"cisco_asa": {
+		Key:           "cisco_asa",
+		Name:          "Cisco ASA",
+		Interactive:   false,
+		SetupCommands: []string{"terminal pager 0"},
+		BackupCommand: "show running-config",
+		EndMarkers:    []string{": end\n", ": end\r\n", "\nend", "\r\nend"},
+		FileExtension: ".cfg",
+	},
 	"huawei_vrp": {
 		Key:           "huawei_vrp",
 		Name:          "Huawei VRP",
@@ -161,6 +184,15 @@ var Profiles = map[string]Profile{
 		EndMarkers:    []string{"\nend", "\r\nend"},
 		FileExtension: ".cfg",
 	},
+	// RouterOS has no fixed end-of-config marker, so only empty output is
+	// rejected. "/export verbose" also lists default values.
+	"mikrotik": {
+		Key:           "mikrotik",
+		Name:          "MikroTik RouterOS",
+		Interactive:   false,
+		BackupCommand: "/export verbose",
+		FileExtension: ".rsc",
+	},
 	// Fallback for anything not explicitly mapped yet.
 	"paloalto": {
 		Key:           "paloalto",
@@ -195,6 +227,27 @@ var aliases = map[string]string{
 	"ios_xe":       "cisco_ios",
 	"iosxe":        "cisco_ios",
 
+	// Cisco Small Business (SF/SG/CBS)
+	"cisco_sb": "cisco_sb",
+	"cisco_sf": "cisco_sb",
+	"cisco_sg": "cisco_sb",
+	"ciscosb":  "cisco_sb",
+	"ciscosf":  "cisco_sb",
+	"ciscosg":  "cisco_sb",
+	"cbs":      "cisco_sb",
+	"cbs350":   "cisco_sb",
+	"sg300":    "cisco_sb",
+	"sg350":    "cisco_sb",
+	"sg500":    "cisco_sb",
+	"sf300":    "cisco_sb",
+	"sf500":    "cisco_sb",
+
+	// Cisco ASA / Firepower FTD in ASA mode
+	"cisco_asa": "cisco_asa",
+	"asa":       "cisco_asa",
+	"cisco_ftd": "cisco_asa",
+	"ftd":       "cisco_asa",
+
 	// Juniper
 	"junos":         "juniper_junos",
 	"juniper":       "juniper_junos",
@@ -204,6 +257,9 @@ var aliases = map[string]string{
 	"huawei":     "huawei_vrp",
 	"vrp":        "huawei_vrp",
 	"huawei_vrp": "huawei_vrp",
+	"h3c":        "huawei_vrp", // H3C / HP Comware use the same CLI
+	"comware":    "huawei_vrp",
+	"hp_comware": "huawei_vrp",
 
 	// Fortinet
 	"fortinet":  "fortigate",
@@ -214,6 +270,11 @@ var aliases = map[string]string{
 	"arista":     "arista",
 	"eos":        "arista",
 	"arista_eos": "arista",
+
+	// MikroTik RouterOS
+	"mikrotik": "mikrotik",
+	"routeros": "mikrotik",
+	"ros":      "mikrotik",
 
 	// Aruba
 	"aruba":    "aruba",

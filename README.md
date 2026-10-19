@@ -245,8 +245,9 @@ sides before the previous and the new configuration are compared:
 
 | Platform | Ignored lines |
 |---|---|
-| Cisco IOS / Arista / Huawei / Aruba / Ruijie | `! Last configuration change at ...`, `! NVRAM config last updated at ...`, `! No configuration change since last restart`, `! Time: ...`, `Current configuration : N bytes`, `Building configuration...`, `ntp clock-period N`, Huawei `!Last configuration was updated/saved at ...` |
+| Cisco IOS / Cisco SB / Cisco ASA / Arista / Huawei / Aruba / Ruijie | `! Last configuration change at ...`, `! NVRAM config last updated at ...`, `! No configuration change since last restart`, `! Time: ...`, `Current configuration : N bytes`, `Building configuration...`, `ntp clock-period N`, Huawei `!Last configuration was updated/saved at ...` |
 | Junos | `## Last changed: ...`, `## Last commit: ...` |
+| MikroTik RouterOS | `/export` header lines `# <date> <time> by RouterOS <version>` (v6 and v7 date formats) and `# software id = ...` |
 | VyOS | `// Warning: Do not remove ...`, `// vyos-config-version ...`, `// Release version ...` (and the `/* */` forms) |
 | VyOS / pfSense / Gaia | `# Generated/Exported/Date/Timestamp/Uptime ...` comment banners |
 
@@ -292,6 +293,13 @@ any alias: `vyos.golden`, `cisco.golden`, `junos.golden`, ...) plus an
 optional `common.golden` that applies to every device. A rules file uses
 `[vendor]` section headers instead (lines before the first header are
 common). See `examples/golden/`.
+
+Baselines are matched on the canonical vendor key, so aliases work in file
+and section names too: `asa.golden` / `ftd.golden` (`cisco_asa`),
+`sg350.golden` / `cbs350.golden` (`cisco_sb`), `routeros.golden`
+(`mikrotik`) and `h3c.golden` / `comware.golden` (`huawei_vrp`). Cisco SB and
+Cisco ASA do **not** inherit `cisco_ios` rules because their CLI differs from
+IOS; they get `common.golden` plus their own file.
 
 ```text
 # A comment ("!" and "//" also start one). Comments must be on their own line.
@@ -355,8 +363,10 @@ edge-rtr-01,10.30.1.1,22,juniper_junos,default,mgmt-gw.corp.com:22
 
 - `port` defaults to `22`.
 - `vendor` defaults to `generic` (`show running-config`). Supported vendor keys:
-  `cisco_ios`, `huawei_vrp`, `juniper_junos`, `aruba`, `ruijie`, `fortigate`,
-  `checkpoint_gaia`, `paloalto`, `pfsense`, `sophos`, `vyos`, `arista`, `generic`.
+  `cisco_ios`, `cisco_sb`, `cisco_asa`, `huawei_vrp`, `juniper_junos`, `aruba`,
+  `ruijie`, `fortigate`, `checkpoint_gaia`, `paloalto`, `pfsense`, `sophos`,
+  `vyos`, `arista`, `mikrotik`, `generic`. Names are case-insensitive and `-` or
+  a space is read as `_`; aliases are accepted (see below).
 - `credential_group` defaults to `default`. If specified as `site_hcm`, the
   tool looks for `NETBACKUP_SITE_HCM_USERNAME` and `NETBACKUP_SITE_HCM_PASSWORD`,
   falling back to `NETBACKUP_USERNAME` / `NETBACKUP_PASSWORD` if not set.
@@ -365,6 +375,20 @@ edge-rtr-01,10.30.1.1,22,juniper_junos,default,mgmt-gw.corp.com:22
   - Named bastion (e.g. `bastion-dc`): resolves from `NETBACKUP_JUMP_BASTION_DC_HOST`, `_USERNAME`, `_PASSWORD`.
   - Direct host/port (e.g. `mgmt-gw.corp.com:22`): dials that address as the bastion.
   - Disable all jump routing on demand with `-jump=false`.
+
+### Cisco SB, Cisco ASA, MikroTik and H3C/Comware
+
+| Key | Platform | Backup command | Extra accepted aliases |
+|---|---|---|---|
+| `cisco_sb` | Cisco Small Business (SF/SG/CBS) | `show running-config` | `cisco_sf`, `cisco_sg`, `ciscosb`, `ciscosf`, `ciscosg`, `cbs`, `cbs350`, `sg300`, `sg350`, `sg500`, `sf300`, `sf500` |
+| `cisco_asa` | Cisco ASA / Firepower FTD in ASA mode | `show running-config` | `asa`, `cisco_ftd`, `ftd` |
+| `mikrotik` | MikroTik RouterOS | `/export verbose` (saved as `.rsc`) | `routeros`, `ros` |
+| `huawei_vrp` | Huawei VRP, also H3C / HP Comware | `display current-configuration` | `h3c`, `comware`, `hp_comware` |
+
+The completeness check looks for a line beginning with `end` or `exit` (Cisco
+SB), a `: end` line or a line beginning with `end` (Cisco ASA), or a line
+beginning with `return` (Huawei / H3C / Comware). RouterOS exports have no end
+marker, so only empty output is rejected there.
 
 
 ## Development, Maintenance & Expansion
